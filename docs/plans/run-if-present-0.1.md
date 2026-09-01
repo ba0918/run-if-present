@@ -116,9 +116,9 @@ OS-string or Unix behavior, rather than raising the compiler floor or changing d
 
 ## Test command
 
-Use `cargo test --all-targets --all-features` for each RED, GREEN, and REFACTOR transition unless a
-step names a narrower single-test command for RED. A step is not complete until the full command
-passes. The final local check order is fixed in Step 10.
+Use `mise exec -E local -- cargo test --all-targets --all-features` for each RED, GREEN, and
+REFACTOR transition unless a step names a narrower single-test command for RED. A step is not
+complete until the full command passes. The final local check order is fixed in Step 10.
 
 ## Out of scope
 
@@ -131,15 +131,16 @@ human action and are not performed by this plan.
 Purpose: Create the minimal buildable package boundary and canonical metadata before behavior is
 added. Specification: `docs/spec/run-if-present.md`#`## 12. Implementation dependencies`,
 `docs/spec/run-if-present.md`#`### 15.1 Versioning and changelog`.
-Prerequisites: Rust 1.85.0 and its bundled Cargo are available; if they are not installed, only a
-local toolchain installation may be performed.
+Prerequisites: run `mise use --env local --pin rust@1.85.0` to install and select Rust 1.85.0 with
+its bundled Cargo. Keep the generated `mise.local.toml` as an untracked local setup file and never
+stage or commit it. Run every Rust or Cargo command through `mise exec -E local --`.
 May change: `Cargo.toml`, `Cargo.lock`, `src/main.rs`, `LICENSE-MIT`, `LICENSE-APACHE`.
 Done when: the empty binary package resolves exactly the specified runtime dependencies, declares
 the required package metadata and sole version, includes both license texts, and builds with Rust
 1.85.0.
-Shown by: check — run `cargo +1.85.0 metadata --locked --no-deps`, then
-`cargo +1.85.0 build --locked`; inspect the metadata for name, version, description, license,
-rust-version, and exact dependency requirements.
+Shown by: check — run `mise exec -E local -- cargo metadata --locked --no-deps`, then
+`mise exec -E local -- cargo build --locked`; inspect the metadata for name, version, description,
+license, rust-version, and exact dependency requirements.
 Left to the implementer: Cargo manifest key ordering and the minimal placeholder shape of
 `src/main.rs`.
 Stop and hand back if: resolving the specified exact crates changes the required compiler floor,
@@ -159,7 +160,8 @@ conversion.
 Shown by: test — RED then GREEN then REFACTOR behavior tests named for rejecting an empty wrapper
 value, requiring the path separator, preserving a child option after `command`, preserving an
 empty child argument, and writing help/version and syntax errors to the specified streams with the
-specified exit results; finish with `cargo test --all-targets --all-features`.
+specified exit results; finish with
+`mise exec -E local -- cargo test --all-targets --all-features`.
 Left to the implementer: private parsed-value types and module layout.
 Stop and hand back if: `clap` cannot preserve the grammar or operating-system strings without a
 new public option, lossy conversion, or a dependency change.
@@ -179,7 +181,8 @@ or child arguments.
 Shown by: test — RED then GREEN then REFACTOR behavior tests named for exact and leading-slash
 tilde expansion, literal `~user`, non-empty/unset/empty/non-UTF-8 `HOME`, empty user-database home,
 relative guards and `PATH` after `--chdir`, missing directories, non-directories, and inspection or
-change-directory failures; finish with `cargo test --all-targets --all-features`.
+change-directory failures; finish with
+`mise exec -E local -- cargo test --all-targets --all-features`.
 Left to the implementer: the private representation of expansion and directory-evaluation results.
 Stop and hand back if: user-database fallback cannot be isolated behind a private dependency and
 tested with non-empty and empty operating-system-string results without privileged mutation; do
@@ -201,7 +204,7 @@ relative `PATH` entries, explicit absolute and relative executable paths contain
 proof that explicit paths are not searched through `PATH`, shell-only names, earlier unusable
 candidates, later usable candidates, inspection failure followed by a usable candidate,
 inspection failure with no usable candidate, preflight-only failure, and confirmed absence; finish with
-`cargo test --all-targets --all-features`.
+`mise exec -E local -- cargo test --all-targets --all-features`.
 Left to the implementer: private classifier types and the smallest local supplement around
 `which` needed to retain the three outcomes.
 Stop and hand back if: `which` behavior makes the specified search ordering or error distinctions
@@ -224,7 +227,7 @@ guards, dangling links, link loops, inaccessible guards, missing and uninvokable
 disappearing selected executables, missing script interpreters, executable-format failure,
 environment/stream/argument preservation, unchanged real and effective credentials, unchanged
 resource limits, close-on-exec descriptor closure, child exit status and signals, and non-UTF-8
-Unix input; finish with `cargo test --all-targets --all-features`.
+Unix input; finish with `mise exec -E local -- cargo test --all-targets --all-features`.
 Left to the implementer: deterministic synchronization used to trigger the resolution-to-execution
 race and the private boundary around Unix process replacement.
 Stop and hand back if: a required failure cannot be triggered deterministically without privileged
@@ -247,7 +250,7 @@ colorless output; add a source-boundary test that scans `src/**` and the locked 
 tree for configuration readers, persistent writes, telemetry or network APIs, shell invocation,
 and credential or privilege-changing APIs, reviewing each match against the only allowed
 `HOME`/`PATH` reads and direct target execution. Inspect `--help` in the same test for excluded
-options, then finish with `cargo test --all-targets --all-features`.
+options, then finish with `mise exec -E local -- cargo test --all-targets --all-features`.
 Left to the implementer: the exact escaping notation, provided it is unambiguous, one-line, and
 lossless enough to distinguish escaped operating-system bytes.
 Stop and hand back if: an escaping choice would add a stable public format beyond the prefix and
@@ -265,8 +268,8 @@ Done when: the English README covers every required topic without claiming unpub
 the changelog contains standalone 0.1 user-visible changes under `Unreleased`, and executable
 examples agree with the CLI.
 Shown by: check — run every README command example that does not require publication against the
-local binary, run `cargo test --all-targets --all-features`, and search README/help/changelog for
-excluded 0.1 features or unsupported-system claims.
+local binary, run `mise exec -E local -- cargo test --all-targets --all-features`, and search
+README/help/changelog for excluded 0.1 features or unsupported-system claims.
 Left to the implementer: prose organization and example operands that preserve the specified
 meaning.
 Stop and hand back if: documenting installation would require claiming that crates.io, a GitHub
@@ -375,10 +378,13 @@ step through Step 10, including the Step 8 and Step 9 actionlint and workflow ch
 Done when: all local checks pass on the locked project, package contents are correct, the public
 surface contains no excluded features, the working diff contains no credential material or build
 artifacts, and every unavailable external result is named explicitly.
-Shown by: check — in order run `cargo +1.85.0 test --all-targets --all-features`,
-`cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
-`cargo +1.85.0 build --release --locked`, `target/release/run-if-present --version`,
-`cargo package`, and `cargo package --list`; then inspect the full scoped diff and scan it for
+Shown by: check — in order run
+`mise exec -E local -- cargo test --all-targets --all-features`,
+`mise exec -E local -- cargo fmt --check`,
+`mise exec -E local -- cargo clippy --all-targets --all-features -- -D warnings`,
+`mise exec -E local -- cargo build --release --locked`,
+`target/release/run-if-present --version`, `mise exec -E local -- cargo package`, and
+`mise exec -E local -- cargo package --list`; then inspect the full scoped diff and scan it for
 credential-shaped assignments and excluded public features. Release-archive smoke tests remain
 pending for Step 11.
 Left to the implementer: none.
