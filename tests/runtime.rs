@@ -88,7 +88,12 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
     } else {
         compiler.args(["-shared", "-fPIC"]);
     }
-    let status = compiler.arg(&source).arg("-o").arg(&library).status().unwrap();
+    let status = compiler
+        .arg(&source)
+        .arg("-o")
+        .arg(&library)
+        .status()
+        .unwrap();
     assert!(status.success());
     library
 }

@@ -303,5 +303,4 @@ mod tests {
         let error = expand_tilde_with(OsStr::new("~/path"), || Some(PathBuf::new())).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
-
 }

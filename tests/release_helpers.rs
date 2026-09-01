@@ -243,7 +243,11 @@ fn a_public_release_with_matching_assets_is_a_noop() {
 
     let output = reconcile_release(&root);
 
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let operations = fs::read_to_string(root.join("github.log")).unwrap();
     assert!(!operations.contains("release upload"));
     assert!(!operations.contains("release create"));
@@ -292,11 +296,18 @@ fn a_draft_release_uploads_only_missing_assets() {
 
     let output = reconcile_release(&root);
 
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let operations = fs::read_to_string(root.join("github.log")).unwrap();
     assert!(operations.contains("release upload v0.1.0"));
     assert!(root.join("github-state/assets/missing.tar.gz").exists());
-    assert_eq!(fs::read(root.join("github-state/assets/archive.tar.gz")).unwrap(), b"same");
+    assert_eq!(
+        fs::read(root.join("github-state/assets/archive.tar.gz")).unwrap(),
+        b"same"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
