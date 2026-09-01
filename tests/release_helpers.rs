@@ -125,6 +125,75 @@ fn publish_release(root: &Path) -> std::process::Output {
         .unwrap()
 }
 
+fn yaml_job_block(workflow: &str, job_name: &str) -> Option<String> {
+    let header = format!("  {job_name}:");
+    let mut lines = workflow.lines();
+    lines.find(|line| *line == header)?;
+
+    let mut block = vec![header];
+    for line in lines {
+        let starts_another_job = line
+            .strip_prefix("  ")
+            .is_some_and(|remainder| !remainder.starts_with(' ') && remainder.ends_with(':'));
+        if starts_another_job {
+            break;
+        }
+        block.push(line.to_owned());
+    }
+    Some(block.join("\n"))
+}
+
+fn yaml_step_blocks(job: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current = None;
+
+    for line in job.lines() {
+        if line.starts_with("      - ") {
+            if let Some(block) = current.replace(vec![line.to_owned()]) {
+                blocks.push(block.join("\n"));
+            }
+        } else if let Some(block) = current.as_mut() {
+            block.push(line.to_owned());
+        }
+    }
+    if let Some(block) = current {
+        blocks.push(block.join("\n"));
+    }
+    blocks
+}
+
+fn registry_token_scope_is_valid(workflow: &str) -> bool {
+    const TOKEN_REFERENCE: &str = "${{ secrets.CARGO_REGISTRY_TOKEN }}";
+    const PUBLISH_STEP_NAME: &str = "- name: Publish only a missing matching crate";
+
+    if workflow.matches(TOKEN_REFERENCE).count() != 1 {
+        return false;
+    }
+    let Some(publish_job) = yaml_job_block(workflow, "publish-crate") else {
+        return false;
+    };
+    if publish_job.contains(&format!(
+        "    env:\n      CARGO_REGISTRY_TOKEN: {TOKEN_REFERENCE}"
+    )) {
+        return false;
+    }
+
+    let steps = yaml_step_blocks(&publish_job);
+    let Some(publish_step) = steps
+        .iter()
+        .find(|step| step.lines().next() == Some(&format!("      {PUBLISH_STEP_NAME}")))
+    else {
+        return false;
+    };
+
+    publish_step.matches(TOKEN_REFERENCE).count() == 1
+        && publish_step.contains("cargo publish --locked")
+        && steps
+            .iter()
+            .filter(|step| *step != publish_step)
+            .all(|step| !step.contains(TOKEN_REFERENCE))
+}
+
 #[test]
 fn release_artifact_shell_steps_do_not_interpolate_the_version_input() {
     let workflow = fs::read_to_string(".github/workflows/release-artifacts.yml").unwrap();
@@ -190,26 +259,29 @@ fn final_release_job_reconciles_downloaded_assets_before_publishing() {
 #[test]
 fn registry_token_is_scoped_only_to_the_cargo_publish_step() {
     let workflow = fs::read_to_string(".github/workflows/release.yml").unwrap();
-    let token_reference = "${{ secrets.CARGO_REGISTRY_TOKEN }}";
-    assert_eq!(workflow.matches(token_reference).count(), 1);
 
-    let publish_job = workflow
-        .split("  publish-crate:")
-        .nth(1)
-        .unwrap()
-        .split("  publish-release:")
-        .next()
-        .unwrap();
-    assert!(!publish_job
-        .contains("    env:\n      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}"));
-    let publish_step = publish_job
-        .split("      - name: Publish only a missing matching crate")
-        .nth(1)
-        .unwrap();
-    assert!(publish_step.contains(
-        "        env:\n          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}"
-    ));
-    assert!(publish_step.contains("cargo publish --locked"));
+    assert!(registry_token_scope_is_valid(&workflow));
+}
+
+#[test]
+fn registry_token_scope_rejects_a_token_moved_to_a_later_step() {
+    let workflow = r#"jobs:
+  publish-crate:
+    steps:
+      - name: Publish only a missing matching crate
+        run: cargo publish --locked
+      - name: Unrelated later step
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: "true"
+  publish-release:
+    steps:
+      - run: echo must-not-be-part-of-publish-crate
+"#;
+
+    assert!(!registry_token_scope_is_valid(workflow));
+    let publish_job = yaml_job_block(workflow, "publish-crate").unwrap();
+    assert!(!publish_job.contains("must-not-be-part-of-publish-crate"));
 }
 
 #[test]
