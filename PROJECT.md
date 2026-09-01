@@ -53,8 +53,8 @@ No implementation directory layout has been established yet.
 - Confirmed absence is the only runtime condition that the wrapper may translate to silent exit
   0. Inspection failures, unusable executables, and failures after presence or resolution must
   remain visible.
-- Do not add configuration files, persistent state, telemetry, runtime network access, shell
-  evaluation, or privilege-management behavior.
+- Do not add configuration files read by the wrapper at runtime, persistent state, telemetry,
+  runtime network access, shell evaluation, or privilege-management behavior.
 - Do not add public features or APIs excluded from version 0.1; Section 17 of the specification is
   authoritative.
 - Creating a public GitHub repository, pushing a tag, or publishing to crates.io or GitHub Releases
