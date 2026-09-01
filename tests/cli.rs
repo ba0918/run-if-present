@@ -57,7 +57,10 @@ fn writes_version_to_stdout() {
     let output = binary().arg("--version").output().unwrap();
 
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "run-if-present 0.1.0\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "run-if-present 0.1.0\n"
+    );
     assert!(output.stderr.is_empty());
 }
 
