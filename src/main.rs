@@ -1,10 +1,26 @@
 mod cli;
 mod runtime;
 
-use clap::{CommandFactory, Parser};
+use clap::{error::ErrorKind, CommandFactory, Parser};
 
 fn main() {
-    let arguments = cli::Arguments::parse();
+    let arguments = match cli::Arguments::try_parse() {
+        Ok(arguments) => arguments,
+        Err(error) if matches!(error.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => {
+            error.exit()
+        }
+        Err(error) => {
+            let rendered = error.to_string();
+            let message = rendered
+                .lines()
+                .next()
+                .unwrap_or("invalid command line")
+                .strip_prefix("error: ")
+                .unwrap_or(rendered.lines().next().unwrap_or("invalid command line"));
+            eprintln!("run-if-present: syntax: {message}");
+            std::process::exit(2);
+        }
+    };
     if arguments.command_help_requested() {
         let mut command = cli::Arguments::command();
         command
@@ -16,15 +32,15 @@ fn main() {
         return;
     }
     if arguments.invalid_empty_chdir() {
-        eprintln!("error: chdir must not be empty");
+        eprintln!("run-if-present: syntax: chdir must not be empty");
         std::process::exit(2);
     }
-    if arguments.invalid_empty_command() {
-        eprintln!("error: command must not be empty");
+    if arguments.invalid_empty_launch_command() {
+        eprintln!("run-if-present: syntax: command must not be empty");
         std::process::exit(2);
     }
     if arguments.invalid_empty_path() {
-        eprintln!("error: path must not be empty");
+        eprintln!("run-if-present: syntax: path must not be empty");
         std::process::exit(2);
     }
     if let Err(error) = runtime::run(arguments) {

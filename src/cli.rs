@@ -3,7 +3,12 @@ use std::ffi::OsString;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "run-if-present", version, color = clap::ColorChoice::Never)]
+#[command(
+    name = "run-if-present",
+    version,
+    color = clap::ColorChoice::Never,
+    disable_help_subcommand = true
+)]
 pub struct Arguments {
     #[arg(long, value_name = "DIR")]
     pub chdir: Option<OsString>,
@@ -31,11 +36,11 @@ pub enum Condition {
 }
 
 impl Arguments {
-    pub fn invalid_empty_command(&self) -> bool {
-        matches!(
-            &self.condition,
-            Condition::Command { command, .. } if command.is_empty()
-        )
+    pub fn invalid_empty_launch_command(&self) -> bool {
+        match &self.condition {
+            Condition::Command { command, .. } => command.is_empty(),
+            Condition::Path { command, .. } => command.first().is_some_and(|value| value.is_empty()),
+        }
     }
 
     pub fn invalid_empty_path(&self) -> bool {
