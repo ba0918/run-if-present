@@ -10,6 +10,11 @@ fn help_exposes_no_excluded_runtime_options() {
         .unwrap();
     let help = String::from_utf8(output.stdout).unwrap();
 
+    assert!(help.contains("--help"));
+    assert!(help.contains("--version"));
+    assert!(!help.contains("-h,"));
+    assert!(!help.contains("-V,"));
+
     for excluded in [
         "--verbose",
         "--quiet",

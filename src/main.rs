@@ -1,11 +1,21 @@
 mod cli;
 mod runtime;
 
-use clap::{error::ErrorKind, CommandFactory, Parser};
+use clap::{error::ErrorKind, Arg, ArgAction, CommandFactory, FromArgMatches};
 
 fn main() {
-    let arguments = match cli::Arguments::try_parse() {
-        Ok(arguments) => arguments,
+    let mut parser = cli::Arguments::command()
+        .arg(Arg::new("help").long("help").action(ArgAction::Help))
+        .arg(
+            Arg::new("version")
+                .long("version")
+                .action(ArgAction::Version),
+        );
+    parser = parser.mut_subcommand("path", |command| {
+        command.arg(Arg::new("help").long("help").action(ArgAction::Help))
+    });
+    let arguments = match parser.try_get_matches() {
+        Ok(matches) => cli::Arguments::from_arg_matches(&matches).expect("matches are valid"),
         Err(error)
             if matches!(
                 error.kind(),
@@ -35,6 +45,10 @@ fn main() {
             .expect("stdout is writable");
         println!();
         return;
+    }
+    if arguments.invalid_short_wrapper_option() {
+        eprintln!("run-if-present: syntax: short help and version options are not supported");
+        std::process::exit(2);
     }
     if arguments.invalid_empty_chdir() {
         eprintln!("run-if-present: syntax: chdir must not be empty");

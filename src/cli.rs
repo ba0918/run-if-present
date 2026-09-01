@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand};
     name = "run-if-present",
     version,
     color = clap::ColorChoice::Never,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    disable_help_flag = true,
+    disable_version_flag = true
 )]
 pub struct Arguments {
     #[arg(long, value_name = "DIR")]
@@ -27,6 +29,7 @@ pub enum Condition {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         arguments: Vec<OsString>,
     },
+    #[command(disable_help_flag = true)]
     Path {
         path: OsString,
 
@@ -57,7 +60,14 @@ impl Arguments {
         matches!(
             &self.condition,
             Condition::Command { command, arguments }
-                if arguments.is_empty() && (command == "--help" || command == "-h")
+                if arguments.is_empty() && command == "--help"
+        )
+    }
+
+    pub fn invalid_short_wrapper_option(&self) -> bool {
+        matches!(
+            &self.condition,
+            Condition::Command { command, .. } if command == "-h" || command == "-V"
         )
     }
 }

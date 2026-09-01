@@ -113,3 +113,22 @@ fn writes_command_help_to_stdout_before_a_command_begins() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
     assert!(output.stderr.is_empty());
 }
+
+#[test]
+fn rejects_all_short_help_and_version_spellings() {
+    for arguments in [
+        vec!["-h"],
+        vec!["-V"],
+        vec!["command", "-h"],
+        vec!["command", "-V"],
+        vec!["path", "-h"],
+        vec!["path", "-V"],
+    ] {
+        let output = binary().args(&arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}");
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.starts_with("run-if-present: syntax:"), "{arguments:?}");
+        assert_eq!(diagnostic.lines().count(), 1, "{arguments:?}");
+    }
+}
