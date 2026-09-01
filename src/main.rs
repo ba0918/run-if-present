@@ -24,15 +24,8 @@ fn main() {
         {
             error.exit()
         }
-        Err(error) => {
-            let rendered = error.to_string();
-            let message = rendered
-                .lines()
-                .next()
-                .unwrap_or("invalid command line")
-                .strip_prefix("error: ")
-                .unwrap_or(rendered.lines().next().unwrap_or("invalid command line"));
-            eprintln!("run-if-present: syntax: {message}");
+        Err(_) => {
+            eprintln!("run-if-present: syntax: invalid command line");
             std::process::exit(2);
         }
     };

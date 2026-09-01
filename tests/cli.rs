@@ -1,3 +1,5 @@
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
 use std::process::Command;
 
 fn binary() -> Command {
@@ -133,5 +135,38 @@ fn rejects_all_short_help_and_version_spellings() {
             "{arguments:?}"
         );
         assert_eq!(diagnostic.lines().count(), 1, "{arguments:?}");
+    }
+}
+
+#[test]
+fn parser_syntax_errors_do_not_render_untrusted_operand_bytes() {
+    let dangerous = OsString::from_vec(b"operand\t\xff\rforged".to_vec());
+    let cases = [
+        vec![dangerous.clone()],
+        vec![OsString::from("path"), dangerous.clone()],
+        vec![
+            OsString::from("--chdir"),
+            dangerous,
+            OsString::from("unknown"),
+        ],
+    ];
+
+    for arguments in cases {
+        let output = binary().args(&arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}");
+        assert_eq!(
+            output.stderr, b"run-if-present: syntax: invalid command line\n",
+            "{arguments:?}"
+        );
+        assert!(!output.stderr.contains(&b'\r'), "{arguments:?}");
+        assert!(!output.stderr.contains(&b'\t'), "{arguments:?}");
+        assert!(
+            !output
+                .stderr
+                .windows(3)
+                .any(|bytes| bytes == [0xef, 0xbf, 0xbd]),
+            "{arguments:?}"
+        );
     }
 }
