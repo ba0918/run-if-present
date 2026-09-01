@@ -1,4 +1,5 @@
 mod cli;
+mod runtime;
 
 use clap::{CommandFactory, Parser};
 
@@ -25,5 +26,9 @@ fn main() {
     if arguments.invalid_empty_path() {
         eprintln!("error: path must not be empty");
         std::process::exit(2);
+    }
+    if let Err(error) = runtime::run(arguments) {
+        error.print();
+        std::process::exit(error.code());
     }
 }

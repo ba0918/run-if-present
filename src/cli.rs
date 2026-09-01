@@ -61,14 +61,11 @@ mod tests {
 
     #[test]
     fn preserves_a_child_option_after_command() {
-        let parsed = Arguments::try_parse_from(["run-if-present", "command", "printf", "--help"])
-            .unwrap();
+        let parsed =
+            Arguments::try_parse_from(["run-if-present", "command", "printf", "--help"]).unwrap();
 
         match parsed.condition {
-            Condition::Command {
-                command,
-                arguments,
-            } => {
+            Condition::Command { command, arguments } => {
                 assert_eq!(command, "printf");
                 assert_eq!(arguments, ["--help"]);
             }
