@@ -837,6 +837,74 @@ int main(int argc, char **argv) {
 }
 
 #[test]
+fn child_arguments_follow_argv0_in_original_order_and_raw_bytes() {
+    let temp = TempDir::new();
+    let name = "raw-argv-reporter";
+    let reporter = temp.path().join(name);
+    compile_c_program(
+        &temp,
+        &reporter,
+        br#"#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+static int emit(const char *bytes, size_t length) {
+    while (length > 0) {
+        ssize_t written = write(STDOUT_FILENO, bytes, length);
+        if (written <= 0) return 1;
+        bytes += written;
+        length -= (size_t)written;
+    }
+    return 0;
+}
+int main(int argc, char **argv) {
+    for (int index = 0; index < argc; index++) {
+        size_t length = strlen(argv[index]);
+        char prefix[64];
+        int prefix_length = snprintf(prefix, sizeof(prefix), "%zu:", length);
+        if (prefix_length < 0 || emit(prefix, (size_t)prefix_length) ||
+            emit(argv[index], length) || emit("\n", 1)) return 3;
+    }
+    return 0;
+}
+"#,
+    );
+    let children = [
+        OsString::from("ascii"),
+        OsString::new(),
+        OsString::from_vec(b"z\xffq".to_vec()),
+    ];
+
+    let direct = Command::new(name)
+        .env("PATH", temp.path())
+        .args(&children)
+        .output()
+        .unwrap();
+    let command_mode = binary()
+        .env("PATH", temp.path())
+        .args(["command", name])
+        .args(&children)
+        .output()
+        .unwrap();
+    let path_mode = binary()
+        .env("PATH", temp.path())
+        .args(["path", "/bin", "--", name])
+        .args(&children)
+        .output()
+        .unwrap();
+
+    let expected = b"17:raw-argv-reporter\n5:ascii\n0:\n3:z\xffq\n";
+    assert_eq!(direct.status.code(), Some(0));
+    assert_eq!(direct.stdout, expected);
+    assert_eq!(command_mode.status.code(), Some(0));
+    assert_eq!(command_mode.stdout, direct.stdout);
+    assert_eq!(path_mode.status.code(), Some(0));
+    assert_eq!(path_mode.stdout, direct.stdout);
+    assert!(direct.stderr.is_empty());
+    assert!(command_mode.stderr.is_empty());
+    assert!(path_mode.stderr.is_empty());
+}
+
+#[test]
 fn an_accessible_candidate_discovered_by_which_runs() {
     let temp = TempDir::new();
     let bin = temp.path().join("bin");
