@@ -94,6 +94,18 @@ impl Drop for TempDir {
     }
 }
 
+fn compile_c_program(temp: &TempDir, output: &Path, source: &[u8]) {
+    let source_path = temp.path().join("fixture.c");
+    fs::write(&source_path, source).unwrap();
+    let compiler = Command::new("cc")
+        .arg(&source_path)
+        .arg("-o")
+        .arg(output)
+        .output()
+        .unwrap();
+    assert!(compiler.status.success(), "{:?}", compiler.stderr);
+}
+
 fn process_boundary_interposer(temp: &TempDir) -> PathBuf {
     let source = temp.path().join("process-boundary.c");
     let library = if cfg!(target_os = "macos") {
@@ -700,14 +712,13 @@ fn a_present_guard_resolves_a_bare_launch_target_from_path() {
 }
 
 #[test]
-fn an_accessible_candidate_discovered_by_which_runs() {
+fn explicit_launches_keep_the_caller_supplied_path_as_argv0() {
     let temp = TempDir::new();
-    let bin = temp.path().join("bin");
-    fs::create_dir(&bin).unwrap();
-    let source = temp.path().join("argv0.c");
-    let tool = bin.join("provider-tool");
-    fs::write(
-        &source,
+    let token = "./explicit-argv0-reporter";
+    let reporter = temp.path().join("explicit-argv0-reporter");
+    compile_c_program(
+        &temp,
+        &reporter,
         br#"#include <string.h>
 #include <unistd.h>
 int main(int argc, char **argv) {
@@ -716,15 +727,140 @@ int main(int argc, char **argv) {
     return write(STDOUT_FILENO, argv[0], length) == (ssize_t)length ? 0 : 3;
 }
 "#,
-    )
-    .unwrap();
-    let compiler = Command::new("cc")
-        .arg(&source)
-        .arg("-o")
-        .arg(&tool)
+    );
+
+    let direct = Command::new(token)
+        .current_dir(temp.path())
         .output()
         .unwrap();
-    assert!(compiler.status.success(), "{:?}", compiler.stderr);
+    let command_mode = binary()
+        .current_dir(temp.path())
+        .args(["command", token])
+        .output()
+        .unwrap();
+    let path_mode = binary()
+        .current_dir(temp.path())
+        .args(["path", ".", "--", token])
+        .output()
+        .unwrap();
+
+    assert_eq!(direct.status.code(), Some(0));
+    assert_eq!(direct.stdout, token.as_bytes());
+    assert_eq!(command_mode.status.code(), Some(0));
+    assert_eq!(command_mode.stdout, direct.stdout);
+    assert_eq!(path_mode.status.code(), Some(0));
+    assert_eq!(path_mode.stdout, direct.stdout);
+}
+
+#[test]
+fn bare_launches_keep_the_same_argv0_as_direct_path_invocation() {
+    let temp = TempDir::new();
+    let name = "argv0-reporter";
+    let reporter = temp.path().join(name);
+    compile_c_program(
+        &temp,
+        &reporter,
+        br#"#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc < 1) return 2;
+    size_t length = strlen(argv[0]);
+    return write(STDOUT_FILENO, argv[0], length) == (ssize_t)length ? 0 : 3;
+}
+"#,
+    );
+
+    let direct = Command::new(name)
+        .env("PATH", temp.path())
+        .output()
+        .unwrap();
+    let command_mode = binary()
+        .env("PATH", temp.path())
+        .args(["command", name])
+        .output()
+        .unwrap();
+    let path_mode = binary()
+        .env("PATH", temp.path())
+        .args(["path", "/bin", "--", name])
+        .output()
+        .unwrap();
+
+    assert_eq!(direct.status.code(), Some(0));
+    assert_eq!(direct.stdout, name.as_bytes());
+    assert_eq!(command_mode.status.code(), Some(0));
+    assert_eq!(command_mode.stdout, direct.stdout);
+    assert_eq!(path_mode.status.code(), Some(0));
+    assert_eq!(path_mode.stdout, direct.stdout);
+}
+
+#[test]
+fn a_non_utf8_bare_command_is_preserved_as_argv0() {
+    let temp = TempDir::new();
+    let name = OsString::from_vec(b"argv0-\xff".to_vec());
+    let reporter = temp.path().join(&name);
+    compile_c_program(
+        &temp,
+        &reporter,
+        br#"#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc < 1) return 2;
+    size_t length = strlen(argv[0]);
+    return write(STDOUT_FILENO, argv[0], length) == (ssize_t)length ? 0 : 3;
+}
+"#,
+    );
+
+    let direct = Command::new(&name)
+        .env("PATH", temp.path())
+        .output()
+        .unwrap();
+    let command_mode = binary()
+        .env("PATH", temp.path())
+        .arg("command")
+        .arg(&name)
+        .output()
+        .unwrap();
+    let path_mode = binary()
+        .env("PATH", temp.path())
+        .args(["path", "/bin", "--"])
+        .arg(&name)
+        .output()
+        .unwrap();
+
+    assert_eq!(direct.status.code(), Some(0));
+    assert_eq!(direct.stdout, name.as_encoded_bytes());
+    assert_eq!(command_mode.status.code(), Some(0));
+    assert_eq!(command_mode.stdout, direct.stdout);
+    assert_eq!(path_mode.status.code(), Some(0));
+    assert_eq!(path_mode.stdout, direct.stdout);
+}
+
+#[test]
+fn an_accessible_candidate_discovered_by_which_runs() {
+    let temp = TempDir::new();
+    let bin = temp.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let interpreter = temp.path().join("script-path-reporter");
+    compile_c_program(
+        &temp,
+        &interpreter,
+        br#"#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc < 2) return 2;
+    size_t length = strlen(argv[1]);
+    return write(STDOUT_FILENO, argv[1], length) == (ssize_t)length ? 0 : 3;
+}
+"#,
+    );
+    let tool = bin.join("provider-tool");
+    fs::write(
+        &tool,
+        format!("#!{}\n", interpreter.to_string_lossy()).as_bytes(),
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
 
     let output = binary()
         .env("PATH", "./bin")

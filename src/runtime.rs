@@ -125,7 +125,7 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
             .map_err(|source| diagnostic("chdir", directory, source, 1))?;
     }
 
-    let (program, child_arguments) = match arguments.condition {
+    let execution = match arguments.condition {
         Condition::Path { path, mut command } => {
             let guard =
                 expand_tilde(&path).map_err(|source| diagnostic("expand", path, source, 1))?;
@@ -135,8 +135,8 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
                 Err(error) => return Err(diagnostic("inspect", guard, error, 1)),
             }
             let requested = command.remove(0);
-            let program = if requested.as_bytes().contains(&b'/') {
-                requested
+            let pathname = if requested.as_bytes().contains(&b'/') {
+                requested.clone()
             } else {
                 resolve_command(&requested)?
                     .ok_or_else(|| {
@@ -149,19 +149,32 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
                     })?
                     .into_os_string()
             };
-            (program, command)
+            Execution {
+                pathname,
+                argv0: requested,
+                arguments: command,
+            }
         }
         Condition::Command { command, arguments } => {
-            let Some(program) = resolve_command(&command)? else {
+            let Some(pathname) = resolve_command(&command)? else {
                 return Ok(());
             };
-            (program.into_os_string(), arguments)
+            Execution {
+                pathname: pathname.into_os_string(),
+                argv0: command,
+                arguments,
+            }
         }
     };
 
-    let error = match replace_process(&program, &child_arguments) {
+    let error = match replace_process(&execution.pathname, &execution.argv0, &execution.arguments) {
         ReplaceProcessError::RestoreSignal(source) => {
-            return Err(diagnostic("prepare execution", program, source, 1));
+            return Err(diagnostic(
+                "prepare execution",
+                execution.pathname,
+                source,
+                1,
+            ));
         }
         ReplaceProcessError::Execute(error) => error,
     };
@@ -171,7 +184,13 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
         _ if error.raw_os_error() == Some(8) => 126,
         _ => 1,
     };
-    Err(diagnostic("execute", program, error, code))
+    Err(diagnostic("execute", execution.pathname, error, code))
+}
+
+struct Execution {
+    pathname: OsString,
+    argv0: OsString,
+    arguments: Vec<OsString>,
 }
 
 enum ReplaceProcessError {
@@ -179,10 +198,10 @@ enum ReplaceProcessError {
     Execute(io::Error),
 }
 
-fn replace_process(program: &OsStr, arguments: &[OsString]) -> ReplaceProcessError {
-    let program = CString::new(program.as_bytes()).expect("OS strings cannot contain NUL bytes");
+fn replace_process(pathname: &OsStr, argv0: &OsStr, arguments: &[OsString]) -> ReplaceProcessError {
+    let pathname = CString::new(pathname.as_bytes()).expect("OS strings cannot contain NUL bytes");
     let mut argv = Vec::with_capacity(arguments.len() + 1);
-    argv.push(program.clone());
+    argv.push(CString::new(argv0.as_bytes()).expect("OS strings cannot contain NUL bytes"));
     argv.extend(arguments.iter().map(|argument| {
         CString::new(argument.as_bytes()).expect("OS strings cannot contain NUL bytes")
     }));
@@ -216,7 +235,7 @@ fn replace_process(program: &OsStr, arguments: &[OsString]) -> ReplaceProcessErr
     // Direct execve avoids execvp's shell fallback for executable-format errors.
     unsafe {
         execve(
-            program.as_ptr(),
+            pathname.as_ptr(),
             argv_pointers.as_ptr(),
             environment_pointers.as_ptr(),
         );
