@@ -39,7 +39,9 @@ impl Arguments {
     pub fn invalid_empty_launch_command(&self) -> bool {
         match &self.condition {
             Condition::Command { command, .. } => command.is_empty(),
-            Condition::Path { command, .. } => command.first().is_some_and(|value| value.is_empty()),
+            Condition::Path { command, .. } => {
+                command.first().is_some_and(|value| value.is_empty())
+            }
         }
     }
 

@@ -6,7 +6,12 @@ use clap::{error::ErrorKind, CommandFactory, Parser};
 fn main() {
     let arguments = match cli::Arguments::try_parse() {
         Ok(arguments) => arguments,
-        Err(error) if matches!(error.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => {
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
             error.exit()
         }
         Err(error) => {

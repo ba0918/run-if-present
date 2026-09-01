@@ -162,8 +162,9 @@ fn an_uninspectable_search_location_exits_1() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .starts_with("run-if-present: inspect executable:"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: inspect executable:")
+    );
 }
 
 #[test]

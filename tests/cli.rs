@@ -77,7 +77,9 @@ fn writes_help_to_stdout() {
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(help.contains("command"));
     assert!(help.contains("path"));
-    assert!(!help.lines().any(|line| line.trim_start().starts_with("help")));
+    assert!(!help
+        .lines()
+        .any(|line| line.trim_start().starts_with("help")));
 }
 
 #[test]
