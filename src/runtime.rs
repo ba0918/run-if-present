@@ -1,5 +1,5 @@
 use std::env;
-use std::ffi::{c_char, CString, OsStr, OsString};
+use std::ffi::{c_char, CStr, CString, OsStr, OsString};
 use std::fs;
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -208,37 +208,18 @@ fn replace_process(pathname: &OsStr, argv0: &OsStr, arguments: &[OsString]) -> R
     let mut argv_pointers: Vec<*const c_char> = argv.iter().map(|value| value.as_ptr()).collect();
     argv_pointers.push(std::ptr::null());
 
-    let environment: Vec<CString> = env::vars_os()
-        .map(|(key, value)| {
-            let mut entry = key.into_vec();
-            entry.push(b'=');
-            entry.extend(value.into_vec());
-            CString::new(entry).expect("environment entries cannot contain NUL bytes")
-        })
-        .collect();
-    let mut environment_pointers: Vec<*const c_char> =
-        environment.iter().map(|value| value.as_ptr()).collect();
-    environment_pointers.push(std::ptr::null());
-
     unsafe extern "C" {
-        fn execve(
-            pathname: *const c_char,
-            argv: *const *const c_char,
-            envp: *const *const c_char,
-        ) -> i32;
+        fn execv(pathname: *const c_char, argv: *const *const c_char) -> i32;
     }
 
     if let Err(error) = restore_inherited_sigpipe_for_exec() {
         return ReplaceProcessError::RestoreSignal(error);
     }
 
-    // Direct execve avoids execvp's shell fallback for executable-format errors.
+    // Direct execv inherits the original environ without normalizing duplicate or raw entries,
+    // and avoids execvp's shell fallback for executable-format errors.
     unsafe {
-        execve(
-            pathname.as_ptr(),
-            argv_pointers.as_ptr(),
-            environment_pointers.as_ptr(),
-        );
+        execv(pathname.as_ptr(), argv_pointers.as_ptr());
     }
     ReplaceProcessError::Execute(io::Error::last_os_error())
 }
@@ -373,20 +354,61 @@ fn is_invokable(metadata: &fs::Metadata) -> bool {
 }
 
 fn expand_tilde(path: &OsStr) -> io::Result<PathBuf> {
-    // The specification requires the standard library's Unix account-database fallback.
-    #[allow(deprecated)]
-    expand_tilde_with(path, || {
-        if env::var_os("HOME").is_some_and(|value| value.is_empty()) {
-            // std::env::home_dir treats an empty HOME as a path, so hide it only while asking
-            // for the account-database fallback and restore it before executing the child.
-            env::remove_var("HOME");
-            let home = env::home_dir();
-            env::set_var("HOME", "");
-            home
-        } else {
-            env::home_dir()
-        }
-    })
+    expand_tilde_with(path, home_directory)
+}
+
+fn home_directory() -> Option<PathBuf> {
+    match env::var_os("HOME") {
+        Some(home) if !home.is_empty() => Some(PathBuf::from(home)),
+        _ => account_database_home(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct Passwd {
+    pw_name: *mut c_char,
+    pw_passwd: *mut c_char,
+    pw_uid: u32,
+    pw_gid: u32,
+    pw_gecos: *mut c_char,
+    pw_dir: *mut c_char,
+    pw_shell: *mut c_char,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct Passwd {
+    pw_name: *mut c_char,
+    pw_passwd: *mut c_char,
+    pw_uid: u32,
+    pw_gid: u32,
+    pw_change: i64,
+    pw_class: *mut c_char,
+    pw_gecos: *mut c_char,
+    pw_dir: *mut c_char,
+    pw_shell: *mut c_char,
+    pw_expire: i64,
+}
+
+fn account_database_home() -> Option<PathBuf> {
+    unsafe extern "C" {
+        fn getuid() -> u32;
+        fn getpwuid(uid: u32) -> *const Passwd;
+    }
+
+    // The wrapper is single-threaded, and the account-database pointer is cloned immediately
+    // before another libc lookup can invalidate its static storage.
+    let record = unsafe { getpwuid(getuid()) };
+    if record.is_null() {
+        return None;
+    }
+    let directory = unsafe { (*record).pw_dir };
+    if directory.is_null() {
+        return None;
+    }
+    let bytes = unsafe { CStr::from_ptr(directory) }.to_bytes().to_vec();
+    Some(PathBuf::from(OsString::from_vec(bytes)))
 }
 
 fn expand_tilde_with(path: &OsStr, home: impl FnOnce() -> Option<PathBuf>) -> io::Result<PathBuf> {

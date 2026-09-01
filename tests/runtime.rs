@@ -130,16 +130,16 @@ static void open_close_on_exec_descriptor(void) {
     if (snprintf(value, sizeof(value), "%d", fd) < 0 ||
         setenv("RUN_IF_PRESENT_CLOEXEC_FD", value, 1) < 0) _exit(125);
 }
-static int disappearing_execve(const char *path, char *const argv[], char *const envp[]) {
+static int disappearing_execv(const char *path, char *const argv[]) {
     const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
     if (target != NULL && strcmp(path, target) == 0) unlink(path);
-    return execve(path, argv, envp);
+    return execv(path, argv);
 }
 #define INTERPOSE(replacement, replacee) \
     __attribute__((used)) static struct { const void *replacement_ptr; const void *replacee_ptr; } \
     interpose_##replacee __attribute__((section("__DATA,__interpose"))) = \
     { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee };
-INTERPOSE(disappearing_execve, execve)
+INTERPOSE(disappearing_execv, execv)
 "#
     } else {
         r#"#define _GNU_SOURCE
@@ -160,12 +160,12 @@ static void open_close_on_exec_descriptor(void) {
     if (snprintf(value, sizeof(value), "%d", fd) < 0 ||
         setenv("RUN_IF_PRESENT_CLOEXEC_FD", value, 1) < 0) _exit(125);
 }
-typedef int (*execve_function)(const char *, char *const[], char *const[]);
-int execve(const char *path, char *const argv[], char *const envp[]) {
+typedef int (*execv_function)(const char *, char *const[]);
+int execv(const char *path, char *const argv[]) {
     const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
     if (target != NULL && strcmp(path, target) == 0) unlink(path);
-    execve_function real_execve = (execve_function)dlsym(RTLD_NEXT, "execve");
-    return real_execve(path, argv, envp);
+    execv_function real_execv = (execv_function)dlsym(RTLD_NEXT, "execv");
+    return real_execv(path, argv);
 }
 "#
     };
@@ -1032,6 +1032,107 @@ fn environment_is_preserved() {
 
     assert_eq!(output.stdout, b"preserved");
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn raw_environment_entries_are_preserved_in_order_without_reconstruction() {
+    let temp = TempDir::new();
+    let observer = temp.path().join("environment-observer");
+    compile_c_program(
+        &temp,
+        &observer,
+        br#"#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+extern char **environ;
+static int emit(const char *bytes, size_t length) {
+    while (length > 0) {
+        ssize_t written = write(STDOUT_FILENO, bytes, length);
+        if (written <= 0) return 1;
+        bytes += written;
+        length -= (size_t)written;
+    }
+    return 0;
+}
+int main(void) {
+    for (char **entry = environ; *entry != NULL; entry++) {
+        size_t length = strlen(*entry);
+        char prefix[64];
+        int prefix_length = snprintf(prefix, sizeof(prefix), "%zu:", length);
+        if (prefix_length < 0 || emit(prefix, (size_t)prefix_length) ||
+            emit(*entry, length) || emit("\n", 1)) return 3;
+    }
+    return 0;
+}
+"#,
+    );
+    let launcher = temp.path().join("environment-launcher");
+    compile_c_program(
+        &temp,
+        &launcher,
+        br#"#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc != 5) return 2;
+    size_t home_size = strlen(argv[3]) + 6;
+    char *home = malloc(home_size);
+    if (home == NULL || snprintf(home, home_size, "HOME=%s", argv[3]) < 0) return 3;
+    char raw_no_equals[] = "NO_EQUALS\xff";
+    char *environment[] = {
+        "FIRST=1",
+        home,
+        raw_no_equals,
+        "HOME=/duplicate",
+        "LAST=1",
+        NULL
+    };
+    char *direct[] = { argv[1], NULL };
+    char *wrapped[] = { argv[2], "path", "~", "--", argv[1], NULL };
+    if (strcmp(argv[4], "direct") == 0) execve(argv[1], direct, environment);
+    else execve(argv[2], wrapped, environment);
+    return 4;
+}
+"#,
+    );
+
+    let launch = |mode: &str| {
+        Command::new(&launcher)
+            .arg(&observer)
+            .arg(env!("CARGO_BIN_EXE_run-if-present"))
+            .arg(temp.path())
+            .arg(mode)
+            .output()
+            .unwrap()
+    };
+    let direct = launch("direct");
+    let wrapped = launch("wrapped");
+
+    let mut expected = Vec::new();
+    let entries = [
+        b"FIRST=1".to_vec(),
+        [
+            b"HOME=".as_slice(),
+            temp.path().as_os_str().as_encoded_bytes(),
+        ]
+        .concat(),
+        b"NO_EQUALS\xff".to_vec(),
+        b"HOME=/duplicate".to_vec(),
+        b"LAST=1".to_vec(),
+    ];
+    for entry in &entries {
+        expected.extend_from_slice(entry.len().to_string().as_bytes());
+        expected.push(b':');
+        expected.extend_from_slice(entry);
+        expected.push(b'\n');
+    }
+    assert_eq!(direct.status.code(), Some(0));
+    assert_eq!(direct.stdout, expected);
+    assert_eq!(wrapped.status.code(), Some(0));
+    assert_eq!(wrapped.stdout, direct.stdout);
+    assert!(direct.stderr.is_empty());
+    assert!(wrapped.stderr.is_empty());
 }
 
 #[test]
