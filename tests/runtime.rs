@@ -537,6 +537,56 @@ fn relative_path_entries_use_the_effective_directory() {
 }
 
 #[test]
+fn a_tilde_path_entry_is_literal_and_relative_to_the_effective_directory() {
+    let effective = TempDir::new();
+    let home = TempDir::new();
+    let effective_bin = effective.path().join("~/bin");
+    let home_bin = home.path().join("bin");
+    fs::create_dir_all(&effective_bin).unwrap();
+    fs::create_dir(&home_bin).unwrap();
+    let effective_tool = effective_bin.join("tool");
+    let home_tool = home_bin.join("tool");
+    fs::write(&effective_tool, b"#!/bin/sh\nprintf effective").unwrap();
+    fs::write(&home_tool, b"#!/bin/sh\nprintf home").unwrap();
+    fs::set_permissions(&effective_tool, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&home_tool, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = binary()
+        .env("HOME", home.path())
+        .env("PATH", "~/bin")
+        .arg("--chdir")
+        .arg(effective.path())
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"effective");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn the_first_regular_file_with_any_execute_bit_is_not_bypassed() {
+    let first = TempDir::new();
+    let second = TempDir::new();
+    let first_tool = first.path().join("tool");
+    fs::write(&first_tool, b"not an executable format").unwrap();
+    fs::set_permissions(&first_tool, fs::Permissions::from_mode(0o010)).unwrap();
+    second.executable("tool", b"#!/bin/sh\nprintf second");
+    let path = std::env::join_paths([first.path(), second.path()]).unwrap();
+
+    let output = binary()
+        .env("PATH", path)
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(126));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: execute:"));
+}
+
+#[test]
 fn environment_is_preserved() {
     let output = binary()
         .env("RUN_IF_PRESENT_TEST_VALUE", "preserved")

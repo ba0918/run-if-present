@@ -156,10 +156,6 @@ fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
     let cwd =
         env::current_dir().map_err(|source| diagnostic("working directory", ".", source, 1))?;
 
-    if let Ok(found) = which::which_in(command, Some(&path), &cwd) {
-        return Ok(Some(found));
-    }
-
     let mut inspection_error = None;
     let mut unusable = None;
     for directory in env::split_paths(&path) {
