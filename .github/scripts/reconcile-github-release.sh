@@ -7,11 +7,24 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 state=$(mktemp -d)
 trap 'rm -rf "$state"' EXIT
 
-if ! gh release view "$tag" --json tagName,isDraft,assets > "$state/release.json" 2>/dev/null; then
-  gh release create "$tag" "$expected"/* \
-    --verify-tag --draft --title "$tag" --generate-notes
-  exit 0
+if ! gh release view "$tag" --json tagName,isDraft,assets \
+  > "$state/release.json" 2> "$state/view-error"; then
+  if grep -Fqx "release not found" "$state/view-error"; then
+    gh release create "$tag" "$expected"/* \
+      --verify-tag --draft --title "$tag" --generate-notes
+    exit 0
+  fi
+  cat "$state/view-error" >&2
+  exit 1
 fi
+
+jq -r '.assets[].name' "$state/release.json" > "$state/remote-assets"
+while IFS= read -r name; do
+  if [[ "$name" != "$(basename "$name")" || ! -f "$expected/$name" ]]; then
+    echo "release assets: existing release contains an unexpected asset" >&2
+    exit 1
+  fi
+done < "$state/remote-assets"
 
 actual_tag=$(jq -r .tagName "$state/release.json")
 if [[ "$actual_tag" != "$tag" ]]; then

@@ -68,7 +68,13 @@ fn github_release_fixture(root: &Path, release_json: &str, remote_asset: &[u8]) 
 set -euo pipefail
 printf '%s\n' "$*" >> "$GH_LOG"
 case "$1 $2" in
-  "release view") cat "$GH_STATE/release.json" ;;
+  "release view")
+    mode=success
+    [[ ! -f "$GH_STATE/view-mode" ]] || mode=$(cat "$GH_STATE/view-mode")
+    if [[ "$mode" == not-found ]]; then echo "release not found" >&2; exit 1; fi
+    if [[ "$mode" == failure ]]; then echo "authentication failed" >&2; exit 1; fi
+    cat "$GH_STATE/release.json"
+    ;;
   "release download")
     shift 2
     while [[ $# -gt 0 ]]; do
@@ -331,6 +337,49 @@ fn a_draft_release_uploads_only_missing_assets() {
         fs::read(root.join("github-state/assets/archive.tar.gz")).unwrap(),
         b"same"
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn only_an_absent_release_is_created_after_lookup_failure() {
+    for (mode, should_create) in [("not-found", true), ("failure", false)] {
+        let root = fixture();
+        let expected = root.join("expected");
+        fs::create_dir(&expected).unwrap();
+        fs::write(expected.join("archive.tar.gz"), b"same").unwrap();
+        github_release_fixture(&root, "{}", b"same");
+        fs::write(root.join("github-state/view-mode"), mode).unwrap();
+
+        let output = reconcile_release(&root);
+        let operations = fs::read_to_string(root.join("github.log")).unwrap();
+
+        assert_eq!(output.status.success(), should_create, "{mode}");
+        assert_eq!(operations.contains("release create"), should_create, "{mode}");
+        assert!(!operations.contains("release upload"), "{mode}");
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn an_unexpected_remote_asset_stops_without_mutation() {
+    let root = fixture();
+    let expected = root.join("expected");
+    fs::create_dir(&expected).unwrap();
+    fs::write(expected.join("archive.tar.gz"), b"same").unwrap();
+    github_release_fixture(
+        &root,
+        r#"{"tagName":"v0.1.0","isDraft":false,"assets":[{"name":"archive.tar.gz"},{"name":"unexpected"}]}"#,
+        b"same",
+    );
+    fs::write(root.join("github-state/assets/unexpected"), b"unexpected").unwrap();
+
+    let output = reconcile_release(&root);
+
+    assert!(!output.status.success());
+    let operations = fs::read_to_string(root.join("github.log")).unwrap();
+    assert!(!operations.contains("release upload"));
+    assert!(!operations.contains("release create"));
+    assert!(!operations.contains("release edit"));
     fs::remove_dir_all(root).unwrap();
 }
 
