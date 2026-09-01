@@ -18,7 +18,7 @@ fn fixture() -> PathBuf {
     .unwrap();
     fs::write(
         root.join("CHANGELOG.md"),
-        "# Changelog\n\n## [0.1.0] - 2024-01-02\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
     )
     .unwrap();
     root
@@ -38,7 +38,7 @@ fn write_changelog_date(root: &Path, date: &str) {
     fs::write(
         root.join("CHANGELOG.md"),
         format!(
-            "# Changelog\n\n## [0.1.0] - {date}\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n"
+            "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - {date}\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n"
         ),
     )
     .unwrap();
@@ -413,6 +413,45 @@ fn package_version_validation_rejects_shell_syntax_without_executing_it() {
 fn release_metadata_accepts_a_fixed_release_date_on_retries() {
     let root = fixture();
     assert!(metadata(&root, "v0.1.0").status.success());
+    assert!(metadata(&root, "v0.1.0").status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_rejects_items_left_in_unreleased_with_an_empty_release() {
+    let root = fixture();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n- Still unreleased.\n\n## [0.1.0] - 2024-01-02\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
+    )
+    .unwrap();
+
+    assert!(!metadata(&root, "v0.1.0").status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_does_not_count_items_from_another_version() {
+    let root = fixture();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - 2024-01-02\n\n## [0.0.9] - 2023-12-01\n\n- An older item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
+    )
+    .unwrap();
+
+    assert!(!metadata(&root, "v0.1.0").status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_accepts_promoted_content_and_empty_unreleased_categories() {
+    let root = fixture();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
+    )
+    .unwrap();
+
     assert!(metadata(&root, "v0.1.0").status.success());
     fs::remove_dir_all(root).unwrap();
 }

@@ -22,7 +22,7 @@ if [[ "$manifest_version" != "$version" ]]; then
 fi
 
 prefix="## [$version] - "
-if ! awk -v prefix="$prefix" '
+dated_heading=$(awk -v prefix="$prefix" '
   function leap(year) {
     return year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)
   }
@@ -40,10 +40,31 @@ if ! awk -v prefix="$prefix" '
     if (month == 2 && leap(year)) limit[2] = 29
     return day <= limit[month]
   }
-  index($0, prefix) == 1 && valid_date(substr($0, length(prefix) + 1)) { found = 1 }
-  END { exit !found }
-' "$changelog"; then
+  index($0, prefix) == 1 && valid_date(substr($0, length(prefix) + 1)) { print; exit }
+' "$changelog")
+if [[ -z "$dated_heading" ]]; then
   echo "release metadata: changelog has no dated $version heading" >&2
+  exit 1
+fi
+
+if ! awk -v target="$dated_heading" '
+  function content(line) {
+    if (line ~ /^[[:space:]]*$/) return 0
+    if (line ~ /^###[#]*([[:space:]]|$)/) return 0
+    if (line ~ /^\[[^]]+\]:[[:space:]]/) return 0
+    return 1
+  }
+  /^## / {
+    if ($0 == "## Unreleased") section = "unreleased"
+    else if ($0 == target) section = "target"
+    else section = "other"
+    next
+  }
+  section == "unreleased" && content($0) { unreleased_content = 1 }
+  section == "target" && content($0) { target_content = 1 }
+  END { exit unreleased_content || !target_content }
+' "$changelog"; then
+  echo "release metadata: changelog content was not promoted to $version" >&2
   exit 1
 fi
 
