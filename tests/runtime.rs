@@ -1,15 +1,45 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_run-if-present"))
+}
+
+fn permission_test_binary(temp: &TempDir) -> Command {
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+    }
+
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let executable = temp.path().join("run-if-present-permission-test");
+    let binary_bytes = fs::read(env!("CARGO_BIN_EXE_run-if-present")).unwrap();
+    fs::write(&executable, binary_bytes).unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut command = Command::new(executable);
+    if unsafe { geteuid() } == 0 {
+        command.gid(65_534).uid(65_534);
+    }
+    command
+}
+
+fn assert_permission_diagnostic(output: &Output, operation: &str) {
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let diagnostic = String::from_utf8(output.stderr.clone()).unwrap();
+    assert_eq!(diagnostic.lines().count(), 1);
+    assert!(diagnostic.starts_with(&format!("run-if-present: {operation}:")));
+    assert!(diagnostic.contains(&io::Error::from_raw_os_error(13).to_string()));
 }
 
 struct TempDir(PathBuf);
@@ -20,8 +50,11 @@ impl TempDir {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("run-if-present-{}-{nonce}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "run-if-present-{}-{nonce}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -188,6 +221,26 @@ fn a_link_loop_is_an_inspection_failure() {
 }
 
 #[test]
+fn a_permission_denied_path_guard_is_an_inspection_failure() {
+    let temp = TempDir::new();
+    let locked = temp.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    let guard = locked.join("guard");
+    fs::write(&guard, b"").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = permission_test_binary(&temp)
+        .arg("path")
+        .arg(&guard)
+        .args(["--", "/bin/false"])
+        .output()
+        .unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_permission_diagnostic(&output, "inspect");
+}
+
+#[test]
 fn a_present_guard_does_not_hide_a_missing_launch_target() {
     let output = binary()
         .args(["path", "/bin", "--", "/definitely/not/present"])
@@ -284,6 +337,24 @@ fn an_uninspectable_search_location_exits_1() {
     assert!(
         String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: inspect executable:")
     );
+}
+
+#[test]
+fn a_permission_denied_path_candidate_is_an_inspection_failure() {
+    let temp = TempDir::new();
+    let locked = temp.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("tool"), b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = permission_test_binary(&temp)
+        .env("PATH", &locked)
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_permission_diagnostic(&output, "inspect executable");
 }
 
 #[test]
@@ -398,6 +469,24 @@ fn a_non_directory_chdir_is_visible() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: chdir:"));
+}
+
+#[test]
+fn a_permission_denied_chdir_is_visible() {
+    let temp = TempDir::new();
+    let locked = temp.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = permission_test_binary(&temp)
+        .arg("--chdir")
+        .arg(&locked)
+        .args(["command", "/bin/true"])
+        .output()
+        .unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_permission_diagnostic(&output, "chdir");
 }
 
 #[test]
