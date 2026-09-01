@@ -188,6 +188,31 @@ fn final_release_job_reconciles_downloaded_assets_before_publishing() {
 }
 
 #[test]
+fn registry_token_is_scoped_only_to_the_cargo_publish_step() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").unwrap();
+    let token_reference = "${{ secrets.CARGO_REGISTRY_TOKEN }}";
+    assert_eq!(workflow.matches(token_reference).count(), 1);
+
+    let publish_job = workflow
+        .split("  publish-crate:")
+        .nth(1)
+        .unwrap()
+        .split("  publish-release:")
+        .next()
+        .unwrap();
+    assert!(!publish_job
+        .contains("    env:\n      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}"));
+    let publish_step = publish_job
+        .split("      - name: Publish only a missing matching crate")
+        .nth(1)
+        .unwrap();
+    assert!(publish_step.contains(
+        "        env:\n          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}"
+    ));
+    assert!(publish_step.contains("cargo publish --locked"));
+}
+
+#[test]
 fn final_publish_rejects_mismatched_assets_without_editing() {
     let root = fixture();
     let expected = root.join("expected");
