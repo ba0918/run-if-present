@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -48,6 +49,56 @@ fn package_version(root: &Path, version: &str) -> std::process::Output {
         .arg(".github/scripts/verify-package-version.sh")
         .arg(version)
         .arg(root.join("Cargo.toml"))
+        .output()
+        .unwrap()
+}
+
+fn github_release_fixture(root: &Path, release_json: &str, remote_asset: &[u8]) -> PathBuf {
+    let bin = root.join("bin");
+    let state = root.join("github-state");
+    fs::create_dir(&bin).unwrap();
+    fs::create_dir(&state).unwrap();
+    fs::create_dir(state.join("assets")).unwrap();
+    fs::write(state.join("release.json"), release_json).unwrap();
+    fs::write(state.join("assets/archive.tar.gz"), remote_asset).unwrap();
+    let gh = bin.join("gh");
+    fs::write(
+        &gh,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$GH_LOG"
+case "$1 $2" in
+  "release view") cat "$GH_STATE/release.json" ;;
+  "release download")
+    shift 2
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == --dir ]]; then destination=$2; break; fi
+      shift
+    done
+    cp "$GH_STATE"/assets/* "$destination/"
+    ;;
+  "release upload") cp "$4" "$GH_STATE/assets/$(basename "$4")" ;;
+  "release create") : ;;
+  *) exit 64 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+fn reconcile_release(root: &Path) -> std::process::Output {
+    let expected = root.join("expected");
+    let mut path = root.join("bin").into_os_string();
+    path.push(":");
+    path.push(std::env::var_os("PATH").unwrap());
+    Command::new("bash")
+        .arg(".github/scripts/reconcile-github-release.sh")
+        .args(["v0.1.0", expected.to_str().unwrap()])
+        .env("PATH", path)
+        .env("GH_STATE", root.join("github-state"))
+        .env("GH_LOG", root.join("github.log"))
         .output()
         .unwrap()
 }
@@ -175,6 +226,77 @@ fn a_partial_draft_keeps_matching_assets_and_selects_only_missing_assets() {
         .unwrap();
     assert!(completed.status.success());
     assert!(completed.stdout.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_public_release_with_matching_assets_is_a_noop() {
+    let root = fixture();
+    let expected = root.join("expected");
+    fs::create_dir(&expected).unwrap();
+    fs::write(expected.join("archive.tar.gz"), b"same").unwrap();
+    github_release_fixture(
+        &root,
+        r#"{"tagName":"v0.1.0","isDraft":false,"assets":[{"name":"archive.tar.gz"}]}"#,
+        b"same",
+    );
+
+    let output = reconcile_release(&root);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let operations = fs::read_to_string(root.join("github.log")).unwrap();
+    assert!(!operations.contains("release upload"));
+    assert!(!operations.contains("release create"));
+    assert!(!operations.contains("release edit"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_public_release_rejects_tag_and_asset_mismatches() {
+    for (tag, remote_asset) in [("v0.1.1", b"same".as_slice()), ("v0.1.0", b"different")] {
+        let root = fixture();
+        let expected = root.join("expected");
+        fs::create_dir(&expected).unwrap();
+        fs::write(expected.join("archive.tar.gz"), b"same").unwrap();
+        github_release_fixture(
+            &root,
+            &format!(
+                r#"{{"tagName":"{tag}","isDraft":false,"assets":[{{"name":"archive.tar.gz"}}]}}"#
+            ),
+            remote_asset,
+        );
+
+        let output = reconcile_release(&root);
+
+        assert!(!output.status.success(), "{tag}");
+        let operations = fs::read_to_string(root.join("github.log")).unwrap();
+        assert!(!operations.contains("release upload"));
+        assert!(!operations.contains("release create"));
+        assert!(!operations.contains("release edit"));
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn a_draft_release_uploads_only_missing_assets() {
+    let root = fixture();
+    let expected = root.join("expected");
+    fs::create_dir(&expected).unwrap();
+    fs::write(expected.join("archive.tar.gz"), b"same").unwrap();
+    fs::write(expected.join("missing.tar.gz"), b"missing").unwrap();
+    github_release_fixture(
+        &root,
+        r#"{"tagName":"v0.1.0","isDraft":true,"assets":[{"name":"archive.tar.gz"}]}"#,
+        b"same",
+    );
+
+    let output = reconcile_release(&root);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let operations = fs::read_to_string(root.join("github.log")).unwrap();
+    assert!(operations.contains("release upload v0.1.0"));
+    assert!(root.join("github-state/assets/missing.tar.gz").exists());
+    assert_eq!(fs::read(root.join("github-state/assets/archive.tar.gz")).unwrap(), b"same");
     fs::remove_dir_all(root).unwrap();
 }
 
