@@ -44,6 +44,55 @@ impl Drop for TempDir {
     }
 }
 
+fn disappearance_interposer(temp: &TempDir) -> PathBuf {
+    let source = temp.path().join("disappear.c");
+    let library = if cfg!(target_os = "macos") {
+        temp.path().join("libdisappear.dylib")
+    } else {
+        temp.path().join("libdisappear.so")
+    };
+    let body = if cfg!(target_os = "macos") {
+        r#"#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+static int disappearing_execve(const char *path, char *const argv[], char *const envp[]) {
+    const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
+    if (target != NULL && strcmp(path, target) == 0) unlink(path);
+    return execve(path, argv, envp);
+}
+#define INTERPOSE(replacement, replacee) \
+    __attribute__((used)) static struct { const void *replacement_ptr; const void *replacee_ptr; } \
+    interpose_##replacee __attribute__((section("__DATA,__interpose"))) = \
+    { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee };
+INTERPOSE(disappearing_execve, execve)
+"#
+    } else {
+        r#"#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+typedef int (*execve_function)(const char *, char *const[], char *const[]);
+int execve(const char *path, char *const argv[], char *const envp[]) {
+    const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
+    if (target != NULL && strcmp(path, target) == 0) unlink(path);
+    execve_function real_execve = (execve_function)dlsym(RTLD_NEXT, "execve");
+    return real_execve(path, argv, envp);
+}
+"#
+    };
+    fs::write(&source, body).unwrap();
+    let mut compiler = Command::new("cc");
+    if cfg!(target_os = "macos") {
+        compiler.args(["-dynamiclib"]);
+    } else {
+        compiler.args(["-shared", "-fPIC"]);
+    }
+    let status = compiler.arg(&source).arg("-o").arg(&library).status().unwrap();
+    assert!(status.success());
+    library
+}
+
 #[test]
 fn a_present_path_runs_the_command_and_preserves_its_output() {
     let output = binary()
@@ -165,6 +214,30 @@ fn an_uninspectable_search_location_exits_1() {
     assert!(
         String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: inspect executable:")
     );
+}
+
+#[test]
+fn an_executable_disappearing_after_resolution_exits_127() {
+    let temp = TempDir::new();
+    let program = temp.executable("disappears", b"#!/bin/sh\nexit 0\n");
+    let interposer = disappearance_interposer(&temp);
+    let mut command = binary();
+    command
+        .env("RUN_IF_PRESENT_DISAPPEAR", &program)
+        .arg("command")
+        .arg(&program);
+    if cfg!(target_os = "macos") {
+        command.env("DYLD_INSERT_LIBRARIES", interposer);
+    } else {
+        command.env("LD_PRELOAD", interposer);
+    }
+
+    let output = command.output().unwrap();
+
+    assert_eq!(output.status.code(), Some(127));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: execute:"));
+    assert!(!program.exists());
 }
 
 #[test]
@@ -426,12 +499,12 @@ fn non_utf8_home_is_used_without_lossy_conversion() {
 fn an_unset_home_uses_the_operating_system_user_database() {
     let output = binary()
         .env_remove("HOME")
-        .args(["path", "~", "--", "/bin/true"])
+        .args(["path", "~", "--", "/bin/printf", "database-home"])
         .output()
         .unwrap();
 
     assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, b"database-home");
     assert!(output.stderr.is_empty());
 }
 
@@ -439,11 +512,11 @@ fn an_unset_home_uses_the_operating_system_user_database() {
 fn an_empty_home_uses_the_operating_system_user_database() {
     let output = binary()
         .env("HOME", "")
-        .args(["path", "~", "--", "/bin/true"])
+        .args(["path", "~", "--", "/bin/printf", "database-home"])
         .output()
         .unwrap();
 
     assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, b"database-home");
     assert!(output.stderr.is_empty());
 }
