@@ -2,8 +2,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
-use std::os::unix::io::AsRawFd;
 use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::io::AsRawFd;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -533,7 +533,14 @@ fn environment_is_preserved() {
 #[test]
 fn child_stderr_is_preserved() {
     let output = binary()
-        .args(["path", "/bin", "--", "/bin/sh", "-c", "printf child-error >&2"])
+        .args([
+            "path",
+            "/bin",
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf child-error >&2",
+        ])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(0));

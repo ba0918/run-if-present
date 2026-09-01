@@ -128,7 +128,10 @@ fn rejects_all_short_help_and_version_spellings() {
         assert_eq!(output.status.code(), Some(2), "{arguments:?}");
         assert!(output.stdout.is_empty(), "{arguments:?}");
         let diagnostic = String::from_utf8_lossy(&output.stderr);
-        assert!(diagnostic.starts_with("run-if-present: syntax:"), "{arguments:?}");
+        assert!(
+            diagnostic.starts_with("run-if-present: syntax:"),
+            "{arguments:?}"
+        );
         assert_eq!(diagnostic.lines().count(), 1, "{arguments:?}");
     }
 }

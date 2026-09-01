@@ -354,7 +354,11 @@ fn only_an_absent_release_is_created_after_lookup_failure() {
         let operations = fs::read_to_string(root.join("github.log")).unwrap();
 
         assert_eq!(output.status.success(), should_create, "{mode}");
-        assert_eq!(operations.contains("release create"), should_create, "{mode}");
+        assert_eq!(
+            operations.contains("release create"),
+            should_create,
+            "{mode}"
+        );
         assert!(!operations.contains("release upload"), "{mode}");
         fs::remove_dir_all(root).unwrap();
     }

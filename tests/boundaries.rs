@@ -91,8 +91,19 @@ fn locked_normal_dependency_tree_has_no_runtime_io_surface() {
         .unwrap();
     assert!(output.status.success());
     let tree = String::from_utf8(output.stdout).unwrap();
-    for forbidden in ["reqwest", "ureq", "tokio", "serde", "config", "tracing", "telemetry"] {
-        assert!(!tree.contains(forbidden), "unexpected dependency {forbidden}");
+    for forbidden in [
+        "reqwest",
+        "ureq",
+        "tokio",
+        "serde",
+        "config",
+        "tracing",
+        "telemetry",
+    ] {
+        assert!(
+            !tree.contains(forbidden),
+            "unexpected dependency {forbidden}"
+        );
     }
 
     let source = ["src/main.rs", "src/cli.rs", "src/runtime.rs"]
@@ -108,6 +119,9 @@ fn locked_normal_dependency_tree_has_no_runtime_io_surface() {
         "std::net",
         "config_dir",
     ] {
-        assert!(!source.contains(forbidden), "unexpected runtime API {forbidden}");
+        assert!(
+            !source.contains(forbidden),
+            "unexpected runtime API {forbidden}"
+        );
     }
 }
