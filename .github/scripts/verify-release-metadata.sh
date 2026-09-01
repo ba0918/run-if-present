@@ -21,16 +21,28 @@ if [[ "$manifest_version" != "$version" ]]; then
   exit 1
 fi
 
-dated_heading=false
-while IFS= read -r line; do
-  prefix="## [$version] - "
-  if [[ "$line" == "$prefix"* ]] && [[ "${line#"$prefix"}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-    dated_heading=true
-    break
-  fi
-done < "$changelog"
-
-if [[ "$dated_heading" != true ]]; then
+prefix="## [$version] - "
+if ! awk -v prefix="$prefix" '
+  function leap(year) {
+    return year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)
+  }
+  function valid_date(date, year, month, day, limit) {
+    if (length(date) != 10 || substr(date, 5, 1) != "-" || substr(date, 8, 1) != "-") return 0
+    year = substr(date, 1, 4)
+    month = substr(date, 6, 2)
+    day = substr(date, 9, 2)
+    if (year !~ /^[0-9][0-9][0-9][0-9]$/ || month !~ /^[0-9][0-9]$/ || day !~ /^[0-9][0-9]$/) return 0
+    year += 0
+    month += 0
+    day += 0
+    if (year < 1 || month < 1 || month > 12 || day < 1) return 0
+    split("31 28 31 30 31 30 31 31 30 31 30 31", limit, " ")
+    if (month == 2 && leap(year)) limit[2] = 29
+    return day <= limit[month]
+  }
+  index($0, prefix) == 1 && valid_date(substr($0, length(prefix) + 1)) { found = 1 }
+  END { exit !found }
+' "$changelog"; then
   echo "release metadata: changelog has no dated $version heading" >&2
   exit 1
 fi

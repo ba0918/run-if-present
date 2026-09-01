@@ -33,6 +33,16 @@ fn metadata(root: &Path, tag: &str) -> std::process::Output {
         .unwrap()
 }
 
+fn write_changelog_date(root: &Path, date: &str) {
+    fs::write(
+        root.join("CHANGELOG.md"),
+        format!(
+            "# Changelog\n\n## [0.1.0] - {date}\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n"
+        ),
+    )
+    .unwrap();
+}
+
 fn package_version(root: &Path, version: &str) -> std::process::Output {
     Command::new("bash")
         .arg(".github/scripts/verify-package-version.sh")
@@ -87,6 +97,20 @@ fn release_metadata_rejects_a_changelog_mismatch() {
     let root = fixture();
     fs::write(root.join("CHANGELOG.md"), "# Changelog\n\n## Unreleased\n").unwrap();
     assert!(!metadata(&root, "v0.1.0").status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_rejects_impossible_calendar_dates() {
+    let root = fixture();
+
+    for date in ["9999-99-99", "2025-02-29", "2024-04-31"] {
+        write_changelog_date(&root, date);
+        assert!(!metadata(&root, "v0.1.0").status.success(), "{date}");
+    }
+
+    write_changelog_date(&root, "2024-02-29");
+    assert!(metadata(&root, "v0.1.0").status.success());
     fs::remove_dir_all(root).unwrap();
 }
 
