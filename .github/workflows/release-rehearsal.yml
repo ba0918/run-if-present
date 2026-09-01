@@ -47,4 +47,3 @@ jobs:
     with:
       ref: ${{ inputs.ref }}
       version: ${{ inputs.version }}
-
