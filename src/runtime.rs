@@ -94,7 +94,12 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
         }
     };
 
-    let error = replace_process(&program, &child_arguments);
+    let error = match replace_process(&program, &child_arguments) {
+        ReplaceProcessError::ResetSignal(source) => {
+            return Err(diagnostic("prepare execution", program, source, 1));
+        }
+        ReplaceProcessError::Execute(error) => error,
+    };
     let code = match error.kind() {
         io::ErrorKind::NotFound => 127,
         io::ErrorKind::PermissionDenied => 126,
@@ -104,7 +109,12 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
     Err(diagnostic("execute", program, error, code))
 }
 
-fn replace_process(program: &OsStr, arguments: &[OsString]) -> io::Error {
+enum ReplaceProcessError {
+    ResetSignal(io::Error),
+    Execute(io::Error),
+}
+
+fn replace_process(program: &OsStr, arguments: &[OsString]) -> ReplaceProcessError {
     let program = CString::new(program.as_bytes()).expect("OS strings cannot contain NUL bytes");
     let mut argv = Vec::with_capacity(arguments.len() + 1);
     argv.push(program.clone());
@@ -132,6 +142,16 @@ fn replace_process(program: &OsStr, arguments: &[OsString]) -> io::Error {
             argv: *const *const c_char,
             envp: *const *const c_char,
         ) -> i32;
+        fn signal(signal: i32, handler: usize) -> usize;
+    }
+
+    // Rust ignores SIGPIPE at startup. Preserving that across exec would make the target behave
+    // differently from direct execution, so restore the POSIX default at the last possible point.
+    const SIGPIPE: i32 = 13;
+    const SIG_DFL: usize = 0;
+    const SIG_ERR: usize = usize::MAX;
+    if unsafe { signal(SIGPIPE, SIG_DFL) } == SIG_ERR {
+        return ReplaceProcessError::ResetSignal(io::Error::last_os_error());
     }
 
     // Direct execve avoids execvp's shell fallback for executable-format errors.
@@ -142,7 +162,7 @@ fn replace_process(program: &OsStr, arguments: &[OsString]) -> io::Error {
             environment_pointers.as_ptr(),
         );
     }
-    io::Error::last_os_error()
+    ReplaceProcessError::Execute(io::Error::last_os_error())
 }
 
 fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {

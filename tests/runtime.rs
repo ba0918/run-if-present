@@ -537,6 +537,24 @@ fn child_signal_is_preserved() {
 }
 
 #[test]
+fn child_sigpipe_disposition_matches_direct_execution() {
+    let script = "kill -PIPE $$; printf survived";
+    let direct = Command::new("/bin/sh")
+        .args(["-c", script])
+        .output()
+        .unwrap();
+    let wrapped = binary()
+        .args(["path", "/bin", "--", "/bin/sh", "-c", script])
+        .output()
+        .unwrap();
+
+    assert_eq!(direct.status.signal(), Some(13));
+    assert!(direct.stdout.is_empty());
+    assert_eq!(wrapped.status.signal(), Some(13));
+    assert!(wrapped.stdout.is_empty());
+}
+
+#[test]
 fn stdin_is_preserved() {
     let mut child = binary()
         .args(["path", "/bin", "--", "/bin/cat"])
