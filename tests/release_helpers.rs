@@ -21,6 +21,11 @@ fn fixture() -> PathBuf {
         "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
     )
     .unwrap();
+    fs::write(
+        root.join("prior-CHANGELOG.md"),
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n- A promoted item.\n",
+    )
+    .unwrap();
     root
 }
 
@@ -30,6 +35,7 @@ fn metadata(root: &Path, tag: &str) -> std::process::Output {
         .arg(tag)
         .arg(root.join("Cargo.toml"))
         .arg(root.join("CHANGELOG.md"))
+        .arg(root.join("prior-CHANGELOG.md"))
         .output()
         .unwrap()
 }
@@ -289,6 +295,21 @@ fn final_release_job_reconciles_downloaded_assets_before_publishing() {
 }
 
 #[test]
+fn release_workflow_supplies_the_tagged_parent_changelog_for_promotion_verification() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").unwrap();
+    let metadata_job = yaml_job_block(&workflow, "metadata").unwrap();
+
+    assert!(metadata_job.contains("fetch-depth: 2"));
+    let prior = metadata_job
+        .find("git show \"$GITHUB_SHA^:CHANGELOG.md\" > prior-CHANGELOG.md")
+        .unwrap();
+    let verification = metadata_job
+        .find("\"$GITHUB_REF_NAME\" Cargo.toml CHANGELOG.md prior-CHANGELOG.md")
+        .unwrap();
+    assert!(prior < verification);
+}
+
+#[test]
 fn registry_token_is_scoped_only_to_the_cargo_publish_step() {
     let workflow = fs::read_to_string(".github/workflows/release.yml").unwrap();
 
@@ -414,6 +435,19 @@ fn release_metadata_accepts_a_fixed_release_date_on_retries() {
     let root = fixture();
     assert!(metadata(&root, "v0.1.0").status.success());
     assert!(metadata(&root, "v0.1.0").status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_rejects_replacing_prior_unreleased_content() {
+    let root = fixture();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- An unrelated replacement.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
+    )
+    .unwrap();
+
+    assert!(!metadata(&root, "v0.1.0").status.success());
     fs::remove_dir_all(root).unwrap();
 }
 

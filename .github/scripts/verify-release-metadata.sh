@@ -4,6 +4,7 @@ set -euo pipefail
 tag=${1:?tag is required}
 manifest=${2:?Cargo.toml path is required}
 changelog=${3:?CHANGELOG.md path is required}
+prior_changelog=${4:?prior CHANGELOG.md path is required}
 
 case "$tag" in
   v[0-9]*.[0-9]*.[0-9]*) version=${tag#v} ;;
@@ -65,6 +66,35 @@ if ! awk -v target="$dated_heading" '
   END { exit unreleased_content || !target_content }
 ' "$changelog"; then
   echo "release metadata: changelog content was not promoted to $version" >&2
+  exit 1
+fi
+
+promotion_dir=$(mktemp -d)
+trap 'rm -rf "$promotion_dir"' EXIT
+extract_section_content() {
+  heading=$1
+  source=$2
+  destination=$3
+  awk -v heading="$heading" '
+    function content(line) {
+      if (line ~ /^[[:space:]]*$/) return 0
+      if (line ~ /^###[#]*([[:space:]]|$)/) return 0
+      if (line ~ /^\[[^]]+\]:[[:space:]]/) return 0
+      return 1
+    }
+    /^## / {
+      if ($0 == heading) section = 1
+      else if (section) exit
+      else section = 0
+      next
+    }
+    section && content($0) { print }
+  ' "$source" > "$destination"
+}
+extract_section_content "## Unreleased" "$prior_changelog" "$promotion_dir/prior"
+extract_section_content "$dated_heading" "$changelog" "$promotion_dir/current"
+if ! cmp -s "$promotion_dir/prior" "$promotion_dir/current"; then
+  echo "release metadata: released content differs from prior Unreleased content" >&2
   exit 1
 fi
 
