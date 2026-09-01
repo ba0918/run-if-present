@@ -21,15 +21,20 @@ fn permission_test_binary(temp: &TempDir) -> Command {
         fn geteuid() -> u32;
     }
 
+    if unsafe { geteuid() } != 0 {
+        return binary();
+    }
+
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755)).unwrap();
     let executable = temp.path().join("run-if-present-permission-test");
     let binary_bytes = fs::read(env!("CARGO_BIN_EXE_run-if-present")).unwrap();
-    fs::write(&executable, binary_bytes).unwrap();
+    let mut fixture_binary = fs::File::create(&executable).unwrap();
+    fixture_binary.write_all(&binary_bytes).unwrap();
+    fixture_binary.sync_all().unwrap();
+    drop(fixture_binary);
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
     let mut command = Command::new(executable);
-    if unsafe { geteuid() } == 0 {
-        command.gid(65_534).uid(65_534);
-    }
+    command.gid(65_534).uid(65_534);
     command
 }
 
@@ -600,6 +605,28 @@ fn a_present_guard_resolves_a_bare_launch_target_from_path() {
 
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"resolved");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn an_accessible_candidate_discovered_by_which_runs() {
+    let temp = TempDir::new();
+    let bin = temp.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let tool = bin.join("provider-tool");
+    fs::write(&tool, b"#!/bin/sh\nprintf %s \"$0\"").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = binary()
+        .env("PATH", "./bin")
+        .arg("--chdir")
+        .arg(temp.path())
+        .args(["command", "provider-tool"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, tool.as_os_str().as_encoded_bytes());
     assert!(output.stderr.is_empty());
 }
 

@@ -159,12 +159,25 @@ fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
     let mut inspection_error = None;
     let mut unusable = None;
     for directory in env::split_paths(&path) {
-        let (candidate, _) = discover_candidate(command, &directory, &cwd);
-        match fs::metadata(&candidate) {
-            Ok(metadata) if is_invokable(&metadata) => return Ok(Some(candidate)),
-            Ok(_) => unusable = unusable.or(Some(candidate)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => inspection_error = inspection_error.or(Some((candidate, error))),
+        let literal = literal_candidate(command, &directory, &cwd);
+        if let Ok(discovered) = which::which_in(command, Some(&directory), &cwd) {
+            if discovered == literal {
+                if let Some(candidate) = retain_search_result(
+                    classify_search_candidate(discovered),
+                    &mut inspection_error,
+                    &mut unusable,
+                ) {
+                    return Ok(Some(candidate));
+                }
+                continue;
+            }
+        }
+        if let Some(candidate) = retain_search_result(
+            classify_search_candidate(literal),
+            &mut inspection_error,
+            &mut unusable,
+        ) {
+            return Ok(Some(candidate));
         }
     }
 
@@ -185,17 +198,50 @@ fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
     }
 }
 
-fn discover_candidate(command: &OsStr, directory: &Path, cwd: &Path) -> (PathBuf, bool) {
-    let literal = if directory.is_absolute() {
+fn literal_candidate(command: &OsStr, directory: &Path, cwd: &Path) -> PathBuf {
+    if directory.is_absolute() {
         directory.join(command)
     } else {
         cwd.join(directory).join(command)
-    };
-    // which expands tilde entries and filters by effective access. Accept its result only when it
-    // identifies the exact literal candidate whose classification the wrapper owns.
-    match which::which_in(command, Some(directory), cwd) {
-        Ok(discovered) if discovered == literal => (discovered, true),
-        _ => (literal, false),
+    }
+}
+
+enum SearchCandidate {
+    Invokable(PathBuf),
+    Absent,
+    Unusable(PathBuf),
+    InspectionFailed(PathBuf, io::Error),
+}
+
+fn classify_search_candidate(candidate: PathBuf) -> SearchCandidate {
+    match fs::metadata(&candidate) {
+        Ok(metadata) if is_invokable(&metadata) => SearchCandidate::Invokable(candidate),
+        Ok(_) => SearchCandidate::Unusable(candidate),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => SearchCandidate::Absent,
+        Err(error) => SearchCandidate::InspectionFailed(candidate, error),
+    }
+}
+
+fn retain_search_result(
+    result: SearchCandidate,
+    inspection_error: &mut Option<(PathBuf, io::Error)>,
+    unusable: &mut Option<PathBuf>,
+) -> Option<PathBuf> {
+    match result {
+        SearchCandidate::Invokable(candidate) => Some(candidate),
+        SearchCandidate::Absent => None,
+        SearchCandidate::Unusable(candidate) => {
+            if unusable.is_none() {
+                *unusable = Some(candidate);
+            }
+            None
+        }
+        SearchCandidate::InspectionFailed(candidate, error) => {
+            if inspection_error.is_none() {
+                *inspection_error = Some((candidate, error));
+            }
+            None
+        }
     }
 }
 
@@ -286,15 +332,6 @@ fn escape_operand(value: &OsStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_accessible_candidate_uses_the_which_discovery_provider() {
-        let (candidate, used_provider) =
-            discover_candidate(OsStr::new("sh"), Path::new("/bin"), Path::new("/"));
-
-        assert_eq!(candidate, Path::new("/bin").join("sh"));
-        assert!(used_provider);
-    }
 
     #[test]
     fn expands_exact_tilde_without_utf8_conversion() {

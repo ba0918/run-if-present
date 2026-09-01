@@ -121,6 +121,9 @@ fn source_has_no_hidden_runtime_surface() {
     assert!(manifest.contains("clap ="));
     assert!(manifest.contains("which = \"=8.0.6\""));
     assert!(source.contains("which::which_in"));
+    assert!(!source.contains("-> (PathBuf, bool)"));
+    assert!(!source.contains("let (candidate, _)"));
+    assert!(source.contains("classify_search_candidate(discovered)"));
 }
 
 #[test]
