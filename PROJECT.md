@@ -13,7 +13,8 @@ the failure instead of hiding it. The approved behavioral contract is
 - The implementation language is Rust, with Rust 1.85 as the minimum supported version.
 - The Cargo package, crate, and installed binary are all named `run-if-present`.
 - Runtime dependencies are `clap` 4.6.6 and `which` 8.0.6. Keep `Cargo.lock` committed.
-- The supported release targets are Linux and macOS on x86_64 and aarch64. Windows is unsupported.
+- The release targets are `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`,
+  `x86_64-apple-darwin`, and `aarch64-apple-darwin`. Windows is unsupported.
 - The project and crate use the SPDX license expression `MIT OR Apache-2.0`.
 - Keep paths and arguments as operating-system strings; valid non-UTF-8 Unix input must not be
   rejected or converted lossily.
