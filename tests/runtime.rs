@@ -130,16 +130,16 @@ static void open_close_on_exec_descriptor(void) {
     if (snprintf(value, sizeof(value), "%d", fd) < 0 ||
         setenv("RUN_IF_PRESENT_CLOEXEC_FD", value, 1) < 0) _exit(125);
 }
-static int disappearing_execv(const char *path, char *const argv[]) {
+static int disappearing_execve(const char *path, char *const argv[], char *const envp[]) {
     const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
     if (target != NULL && strcmp(path, target) == 0) unlink(path);
-    return execv(path, argv);
+    return execve(path, argv, envp);
 }
 #define INTERPOSE(replacement, replacee) \
     __attribute__((used)) static struct { const void *replacement_ptr; const void *replacee_ptr; } \
     interpose_##replacee __attribute__((section("__DATA,__interpose"))) = \
     { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee };
-INTERPOSE(disappearing_execv, execv)
+INTERPOSE(disappearing_execve, execve)
 "#
     } else {
         r#"#define _GNU_SOURCE
@@ -160,12 +160,12 @@ static void open_close_on_exec_descriptor(void) {
     if (snprintf(value, sizeof(value), "%d", fd) < 0 ||
         setenv("RUN_IF_PRESENT_CLOEXEC_FD", value, 1) < 0) _exit(125);
 }
-typedef int (*execv_function)(const char *, char *const[]);
-int execv(const char *path, char *const argv[]) {
+typedef int (*execve_function)(const char *, char *const[], char *const[]);
+int execve(const char *path, char *const argv[], char *const envp[]) {
     const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
     if (target != NULL && strcmp(path, target) == 0) unlink(path);
-    execv_function real_execv = (execv_function)dlsym(RTLD_NEXT, "execv");
-    return real_execv(path, argv);
+    execve_function real_execve = (execve_function)dlsym(RTLD_NEXT, "execve");
+    return real_execve(path, argv, envp);
 }
 "#
     };
@@ -406,7 +406,10 @@ fn an_executable_disappearing_after_resolution_exits_127() {
 
     assert_eq!(output.status.code(), Some(127));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: execute:"));
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(diagnostic.starts_with("run-if-present: execute:"));
+    assert_eq!(diagnostic.lines().count(), 1);
+    assert!(diagnostic.ends_with('\n'));
     assert!(!program.exists());
 }
 
