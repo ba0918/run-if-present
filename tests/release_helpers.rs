@@ -33,6 +33,40 @@ fn metadata(root: &Path, tag: &str) -> std::process::Output {
         .unwrap()
 }
 
+fn package_version(root: &Path, version: &str) -> std::process::Output {
+    Command::new("bash")
+        .arg(".github/scripts/verify-package-version.sh")
+        .arg(version)
+        .arg(root.join("Cargo.toml"))
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn release_artifact_shell_steps_do_not_interpolate_the_version_input() {
+    let workflow = fs::read_to_string(".github/workflows/release-artifacts.yml").unwrap();
+    let direct_uses: Vec<_> = workflow
+        .lines()
+        .filter(|line| line.contains("${{ inputs.version }}"))
+        .collect();
+
+    assert_eq!(direct_uses, ["          VERSION: ${{ inputs.version }}"]);
+}
+
+#[test]
+fn package_version_validation_rejects_shell_syntax_without_executing_it() {
+    let root = fixture();
+    let marker = root.join("must-not-exist");
+    let version = format!("0.1.0$(touch {})", marker.display());
+
+    assert!(package_version(&root, "0.1.0").status.success());
+    let output = package_version(&root, &version);
+
+    assert!(!output.status.success());
+    assert!(!marker.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn release_metadata_accepts_a_fixed_release_date_on_retries() {
     let root = fixture();

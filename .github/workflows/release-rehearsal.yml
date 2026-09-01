@@ -22,11 +22,17 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
       - name: Require a full commit SHA
         env:
           REHEARSAL_REF: ${{ inputs.ref }}
+          VERSION: ${{ inputs.version }}
         run: |
           [[ "$REHEARSAL_REF" =~ ^[0-9a-f]{40}$ ]]
+          .github/scripts/verify-package-version.sh "$VERSION" Cargo.toml
 
   verify:
     needs: immutable-ref
