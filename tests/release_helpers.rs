@@ -337,17 +337,24 @@ fn a_draft_release_uploads_only_missing_assets() {
 #[test]
 fn release_archive_has_the_uniform_layout() {
     let root = fixture();
-    let output_dir = root.join("output");
-    let status = Command::new("bash")
-        .arg(".github/scripts/make-release-archive.sh")
-        .arg(env!("CARGO_BIN_EXE_run-if-present"))
-        .args(["0.1.0", "x86_64-unknown-linux-musl"])
-        .arg(&output_dir)
-        .status()
-        .unwrap();
-    assert!(status.success());
+    let first = root.join("first");
+    let second = root.join("second");
+    for output_dir in [&first, &second] {
+        let status = Command::new("bash")
+            .arg(".github/scripts/make-release-archive.sh")
+            .arg(env!("CARGO_BIN_EXE_run-if-present"))
+            .args(["0.1.0", "x86_64-unknown-linux-musl"])
+            .arg(output_dir)
+            .env("SOURCE_DATE_EPOCH", "1700000000")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 
-    let archive = output_dir.join("run-if-present-v0.1.0-x86_64-unknown-linux-musl.tar.gz");
+    let archive = first.join("run-if-present-v0.1.0-x86_64-unknown-linux-musl.tar.gz");
+    let regenerated = second.join("run-if-present-v0.1.0-x86_64-unknown-linux-musl.tar.gz");
+    assert_eq!(fs::read(&archive).unwrap(), fs::read(regenerated).unwrap());
     let listing = Command::new("tar")
         .args(["-tzf"])
         .arg(archive)

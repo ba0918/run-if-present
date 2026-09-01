@@ -123,9 +123,12 @@ jobs:
             | grep -Fx "run-if-present $VERSION"
       - name: Create the uniform archive
         env:
+          REF: ${{ needs.metadata.outputs.ref }}
           VERSION: ${{ needs.metadata.outputs.version }}
           TARGET: ${{ matrix.target }}
         run: |
+          export SOURCE_DATE_EPOCH
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$REF")
           .github/scripts/make-release-archive.sh \
             "target/$TARGET/release/run-if-present" \
             "$VERSION" "$TARGET" release-archive
