@@ -567,6 +567,45 @@ fn release_metadata_requires_an_exact_https_comparison_range() {
 }
 
 #[test]
+fn release_metadata_rejects_spaces_in_comparison_links() {
+    let root = fixture();
+    for link in [
+        "[0.1.0]: https://example .invalid/compare/v0.0.0...v0.1.0",
+        "[0.1.0]: https://example.invalid/compare/release candidate...v0.1.0",
+    ] {
+        write_changelog_link(&root, link);
+        assert!(!metadata(&root, "v0.1.0").status.success(), "{link}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_rejects_tabs_in_comparison_links() {
+    let root = fixture();
+    for link in [
+        "[0.1.0]: https://example\t.invalid/compare/v0.0.0...v0.1.0",
+        "[0.1.0]: https://example.invalid/compare/release\tcandidate...v0.1.0",
+    ] {
+        write_changelog_link(&root, link);
+        assert!(!metadata(&root, "v0.1.0").status.success(), "{link:?}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_rejects_more_than_three_range_dots() {
+    let root = fixture();
+    for link in [
+        "[0.1.0]: https://example.invalid/compare/v0.0.0....v0.1.0",
+        "[0.1.0]: https://example.invalid/compare/v0.0.0.....v0.1.0",
+    ] {
+        write_changelog_link(&root, link);
+        assert!(!metadata(&root, "v0.1.0").status.success(), "{link}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn release_metadata_rejects_impossible_calendar_dates() {
     let root = fixture();
 
