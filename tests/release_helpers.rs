@@ -50,6 +50,16 @@ fn write_changelog_date(root: &Path, date: &str) {
     .unwrap();
 }
 
+fn write_changelog_link(root: &Path, link: &str) {
+    fs::write(
+        root.join("CHANGELOG.md"),
+        format!(
+            "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n{link}\n"
+        ),
+    )
+    .unwrap();
+}
+
 fn package_version(root: &Path, version: &str) -> std::process::Output {
     Command::new("bash")
         .arg(".github/scripts/verify-package-version.sh")
@@ -528,6 +538,31 @@ fn release_metadata_compares_the_link_label_and_version_literally() {
     .unwrap();
 
     assert!(!metadata(&root, "v0.1.0").status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_requires_an_exact_https_comparison_range() {
+    let root = fixture();
+
+    for link in [
+        "[0.1.0]: https://example.invalid/releases/tag/v0.1.0",
+        "[0.1.0]: https://example.invalid/compare/...v0.1.0",
+        "[0.1.0]: https://example.invalid/compare/v0.0.0.v0.1.0",
+        "[0.1.0]: https://example.invalid/compare/v0.0.0..v0.1.0",
+        "[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0?version=v0.1.0",
+        "[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0#v0.1.0",
+        "[0.1.1]: https://example.invalid/compare/v0.0.0...v0.1.0",
+    ] {
+        write_changelog_link(&root, link);
+        assert!(!metadata(&root, "v0.1.0").status.success(), "{link}");
+    }
+
+    write_changelog_link(
+        &root,
+        "[0.1.0]: https://code.example/owner/project/compare/release-0.0...v0.1.0",
+    );
+    assert!(metadata(&root, "v0.1.0").status.success());
     fs::remove_dir_all(root).unwrap();
 }
 

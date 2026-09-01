@@ -101,9 +101,16 @@ fi
 link_prefix="[$version]: https://"
 link_suffix="v$version"
 if ! awk -v prefix="$link_prefix" -v suffix="$link_suffix" '
-  index($0, prefix) == 1 &&
-    length($0) > length(prefix) + length(suffix) &&
-    substr($0, length($0) - length(suffix) + 1) == suffix { found = 1 }
+  index($0, prefix) == 1 {
+    url = substr($0, length(prefix) + 1)
+    if (url ~ /[[:space:]?#]/) next
+    comparison = index(url, "/compare/")
+    if (comparison <= 1) next
+    range = substr(url, comparison + length("/compare/"))
+    separator = index(range, "...")
+    if (separator <= 1) next
+    if (substr(range, separator + 3) == suffix) found = 1
+  }
   END { exit !found }
 ' "$changelog"; then
   echo "release metadata: changelog has no $version comparison link" >&2
