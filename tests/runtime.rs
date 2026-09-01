@@ -3,7 +3,6 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{symlink, PermissionsExt};
-use std::os::unix::io::AsRawFd;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -45,17 +44,30 @@ impl Drop for TempDir {
     }
 }
 
-fn disappearance_interposer(temp: &TempDir) -> PathBuf {
-    let source = temp.path().join("disappear.c");
+fn process_boundary_interposer(temp: &TempDir) -> PathBuf {
+    let source = temp.path().join("process-boundary.c");
     let library = if cfg!(target_os = "macos") {
-        temp.path().join("libdisappear.dylib")
+        temp.path().join("libprocess-boundary.dylib")
     } else {
-        temp.path().join("libdisappear.so")
+        temp.path().join("libprocess-boundary.so")
     };
     let body = if cfg!(target_os = "macos") {
-        r#"#include <stdlib.h>
+        r#"#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+__attribute__((constructor))
+static void open_close_on_exec_descriptor(void) {
+    if (getenv("RUN_IF_PRESENT_CLOEXEC_FD") != NULL) return;
+    const char *path = getenv("RUN_IF_PRESENT_OPEN_CLOEXEC");
+    if (path == NULL) return;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) _exit(125);
+    char value[32];
+    if (snprintf(value, sizeof(value), "%d", fd) < 0 ||
+        setenv("RUN_IF_PRESENT_CLOEXEC_FD", value, 1) < 0) _exit(125);
+}
 static int disappearing_execve(const char *path, char *const argv[], char *const envp[]) {
     const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
     if (target != NULL && strcmp(path, target) == 0) unlink(path);
@@ -70,9 +82,22 @@ INTERPOSE(disappearing_execve, execve)
     } else {
         r#"#define _GNU_SOURCE
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+__attribute__((constructor))
+static void open_close_on_exec_descriptor(void) {
+    if (getenv("RUN_IF_PRESENT_CLOEXEC_FD") != NULL) return;
+    const char *path = getenv("RUN_IF_PRESENT_OPEN_CLOEXEC");
+    if (path == NULL) return;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) _exit(125);
+    char value[32];
+    if (snprintf(value, sizeof(value), "%d", fd) < 0 ||
+        setenv("RUN_IF_PRESENT_CLOEXEC_FD", value, 1) < 0) _exit(125);
+}
 typedef int (*execve_function)(const char *, char *const[], char *const[]);
 int execve(const char *path, char *const argv[], char *const envp[]) {
     const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
@@ -265,7 +290,7 @@ fn an_uninspectable_search_location_exits_1() {
 fn an_executable_disappearing_after_resolution_exits_127() {
     let temp = TempDir::new();
     let program = temp.executable("disappears", b"#!/bin/sh\nexit 0\n");
-    let interposer = disappearance_interposer(&temp);
+    let interposer = process_boundary_interposer(&temp);
     let mut command = binary();
     command
         .env("RUN_IF_PRESENT_DISAPPEAR", &program)
@@ -580,21 +605,29 @@ fn resource_limits_are_preserved() {
 
 #[test]
 fn a_close_on_exec_descriptor_is_closed_before_the_child() {
-    let file = fs::File::open("Cargo.toml").unwrap();
-    let descriptor = file.as_raw_fd().to_string();
-    let output = binary()
+    let temp = TempDir::new();
+    let interposer = process_boundary_interposer(&temp);
+    let mut command = binary();
+    command
+        .env(
+            "RUN_IF_PRESENT_OPEN_CLOEXEC",
+            fs::canonicalize("Cargo.toml").unwrap(),
+        )
         .args([
             "path",
             "/bin",
             "--",
             "/bin/sh",
             "-c",
-            "test ! -e \"/dev/fd/$1\"",
-            "sh",
-        ])
-        .arg(descriptor)
-        .output()
-        .unwrap();
+            "test -n \"$RUN_IF_PRESENT_CLOEXEC_FD\" && test ! -e \"/dev/fd/$RUN_IF_PRESENT_CLOEXEC_FD\"",
+        ]);
+    if cfg!(target_os = "macos") {
+        command.env("DYLD_INSERT_LIBRARIES", interposer);
+    } else {
+        command.env("LD_PRELOAD", interposer);
+    }
+
+    let output = command.output().unwrap();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
