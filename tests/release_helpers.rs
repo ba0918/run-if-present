@@ -15,20 +15,9 @@ fn fixture() -> PathBuf {
         "[package]\nname = \"run-if-present\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
-    let date = String::from_utf8(
-        Command::new("date")
-            .args(["-u", "+%F"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
     fs::write(
         root.join("CHANGELOG.md"),
-        format!(
-            "# Changelog\n\n## [0.1.0] - {}\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
-            date.trim()
-        ),
+        "# Changelog\n\n## [0.1.0] - 2024-01-02\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
     )
     .unwrap();
     root
@@ -45,8 +34,9 @@ fn metadata(root: &Path, tag: &str) -> std::process::Output {
 }
 
 #[test]
-fn release_metadata_accepts_one_agreeing_version() {
+fn release_metadata_accepts_a_fixed_release_date_on_retries() {
     let root = fixture();
+    assert!(metadata(&root, "v0.1.0").status.success());
     assert!(metadata(&root, "v0.1.0").status.success());
     fs::remove_dir_all(root).unwrap();
 }

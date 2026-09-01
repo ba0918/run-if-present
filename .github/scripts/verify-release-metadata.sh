@@ -21,7 +21,16 @@ if [[ "$manifest_version" != "$version" ]]; then
   exit 1
 fi
 
-if ! grep -Fqx "## [$version] - $(date -u +%F)" "$changelog"; then
+dated_heading=false
+while IFS= read -r line; do
+  prefix="## [$version] - "
+  if [[ "$line" == "$prefix"* ]] && [[ "${line#"$prefix"}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    dated_heading=true
+    break
+  fi
+done < "$changelog"
+
+if [[ "$dated_heading" != true ]]; then
   echo "release metadata: changelog has no dated $version heading" >&2
   exit 1
 fi
