@@ -162,6 +162,23 @@ fn yaml_step_blocks(job: &str) -> Vec<String> {
     blocks
 }
 
+fn yaml_child_block(parent: &str, indentation: usize, key: &str) -> Option<String> {
+    let header = format!("{}{key}:", " ".repeat(indentation));
+    let scalar_header = format!("{header} ");
+    let mut lines = parent.lines();
+    let first_line = lines.find(|line| *line == header || line.starts_with(&scalar_header))?;
+
+    let mut block = vec![first_line.to_owned()];
+    for line in lines {
+        let leading_spaces = line.bytes().take_while(|byte| *byte == b' ').count();
+        if !line.is_empty() && leading_spaces <= indentation {
+            break;
+        }
+        block.push(line.to_owned());
+    }
+    Some(block.join("\n"))
+}
+
 fn registry_token_scope_is_valid(workflow: &str) -> bool {
     const TOKEN_REFERENCE: &str = "${{ secrets.CARGO_REGISTRY_TOKEN }}";
     const PUBLISH_STEP_NAME: &str = "- name: Publish only a missing matching crate";
@@ -186,8 +203,23 @@ fn registry_token_scope_is_valid(workflow: &str) -> bool {
         return false;
     };
 
+    let Some(environment) = yaml_child_block(publish_step, 8, "env") else {
+        return false;
+    };
+    let Some(run) = yaml_child_block(publish_step, 8, "run") else {
+        return false;
+    };
+    let token_entry = format!("          CARGO_REGISTRY_TOKEN: {TOKEN_REFERENCE}");
+
     publish_step.matches(TOKEN_REFERENCE).count() == 1
-        && publish_step.contains("cargo publish --locked")
+        && environment
+            .lines()
+            .filter(|line| *line == token_entry)
+            .count()
+            == 1
+        && environment.matches(TOKEN_REFERENCE).count() == 1
+        && !run.contains(TOKEN_REFERENCE)
+        && run.contains("cargo publish --locked")
         && steps
             .iter()
             .filter(|step| *step != publish_step)
@@ -282,6 +314,25 @@ fn registry_token_scope_rejects_a_token_moved_to_a_later_step() {
     assert!(!registry_token_scope_is_valid(workflow));
     let publish_job = yaml_job_block(workflow, "publish-crate").unwrap();
     assert!(!publish_job.contains("must-not-be-part-of-publish-crate"));
+}
+
+#[test]
+fn registry_token_scope_rejects_a_token_moved_to_the_publish_run_block() {
+    let workflow = r#"jobs:
+  publish-crate:
+    steps:
+      - name: Publish only a missing matching crate
+        env:
+          VERSION: 0.1.0
+        run: |
+          echo "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+          cargo publish --locked
+  publish-release:
+    steps:
+      - run: "true"
+"#;
+
+    assert!(!registry_token_scope_is_valid(workflow));
 }
 
 #[test]
