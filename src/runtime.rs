@@ -302,7 +302,12 @@ fn expand_tilde_with(path: &OsStr, home: impl FnOnce() -> Option<PathBuf>) -> io
     if bytes == b"~" {
         Ok(home)
     } else {
-        Ok(home.join(OsString::from_vec(bytes[2..].to_vec())))
+        let suffix = bytes[2..]
+            .iter()
+            .skip_while(|byte| **byte == b'/')
+            .copied()
+            .collect();
+        Ok(home.join(OsString::from_vec(suffix)))
     }
 }
 
@@ -355,6 +360,21 @@ mod tests {
             Path::new("~/bin/tool"),
             Path::new("/home/user/bin/tool")
         ));
+    }
+
+    #[test]
+    fn repeated_slashes_after_tilde_keep_a_non_utf8_suffix_relative_to_home() {
+        let home = PathBuf::from("/home/example");
+        let path = OsString::from_vec(vec![b'~', b'/', b'/', b'/', b'g', 0xff]);
+
+        assert_eq!(
+            expand_tilde_with(&path, || Some(home.clone())).unwrap(),
+            home.join(OsString::from_vec(vec![b'g', 0xff]))
+        );
+        assert_eq!(
+            expand_tilde_with(OsStr::new("~//etc"), || Some(home.clone())).unwrap(),
+            home.join("etc")
+        );
     }
 
     #[test]

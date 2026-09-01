@@ -578,6 +578,48 @@ fn tilde_guards_use_non_empty_home() {
 }
 
 #[test]
+fn repeated_slashes_in_a_tilde_guard_do_not_escape_home() {
+    assert!(Path::new("/etc").exists());
+    let home = TempDir::new();
+
+    let output = binary()
+        .env("HOME", home.path())
+        .args(["path", "~//etc", "--", "/bin/printf", "escaped"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn repeated_slashes_in_a_tilde_chdir_stay_within_home() {
+    let home = TempDir::new();
+    let name = home.path().file_name().unwrap();
+    let directory = home.path().join(name);
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("guard"), b"").unwrap();
+    let mut chdir = OsString::from("~//");
+    chdir.push(name);
+
+    let output = binary()
+        .env("HOME", home.path())
+        .arg("--chdir")
+        .arg(chdir)
+        .args(["path", "guard", "--", "/bin/pwd"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        directory.to_string_lossy()
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn diagnostic_operands_cannot_forge_a_new_line() {
     let program = OsString::from("/missing\nforged");
     let output = binary()
