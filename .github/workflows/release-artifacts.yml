@@ -21,11 +21,19 @@ jobs:
     permissions:
       contents: read
     outputs:
+      ref: ${{ steps.ref.outputs.ref }}
       version: ${{ steps.version.outputs.version }}
     steps:
+      - id: ref
+        name: Validate the immutable source ref
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]]
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ steps.ref.outputs.ref }}
           persist-credentials: false
       - id: version
         name: Validate the requested package version
@@ -43,14 +51,16 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.metadata.outputs.ref }}
           persist-credentials: false
       - name: Select the publication toolchain
         run: |
           rustup toolchain install 1.85.0 --profile minimal
           rustup override set 1.85.0
       - name: Fix the source timestamp
-        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct '${{ inputs.ref }}')" >> "$GITHUB_ENV"
+        env:
+          REF: ${{ needs.metadata.outputs.ref }}
+        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$REF")" >> "$GITHUB_ENV"
       - name: Create and reproduce the crate package
         env:
           VERSION: ${{ needs.metadata.outputs.version }}
@@ -94,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.metadata.outputs.ref }}
           persist-credentials: false
       - name: Select Rust 1.85.0
         run: |

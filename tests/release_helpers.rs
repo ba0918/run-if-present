@@ -115,6 +115,29 @@ fn release_artifact_shell_steps_do_not_interpolate_the_version_input() {
 }
 
 #[test]
+fn release_artifact_workflow_validates_ref_before_using_it() {
+    let workflow = fs::read_to_string(".github/workflows/release-artifacts.yml").unwrap();
+    let direct_uses: Vec<_> = workflow
+        .lines()
+        .filter(|line| line.contains("${{ inputs.ref }}"))
+        .collect();
+    assert_eq!(direct_uses, ["          REF: ${{ inputs.ref }}"]);
+    assert!(workflow.contains("[[ \"$REF\" =~ ^[0-9a-f]{40}$ ]]"));
+
+    let root = fixture();
+    let marker = root.join("must-not-exist");
+    let malicious = format!("$(touch {})", marker.display());
+    let status = Command::new("bash")
+        .args(["-c", "[[ \"$REF\" =~ ^[0-9a-f]{40}$ ]]"])
+        .env("REF", malicious)
+        .status()
+        .unwrap();
+    assert!(!status.success());
+    assert!(!marker.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn package_version_validation_rejects_shell_syntax_without_executing_it() {
     let root = fixture();
     let marker = root.join("must-not-exist");
