@@ -149,6 +149,24 @@ fn an_unusable_command_exits_126() {
 }
 
 #[test]
+fn an_uninspectable_search_location_exits_1() {
+    let temp = TempDir::new();
+    let not_a_directory = temp.path().join("not-a-directory");
+    fs::write(&not_a_directory, b"").unwrap();
+
+    let output = binary()
+        .env("PATH", not_a_directory)
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .starts_with("run-if-present: inspect executable:"));
+}
+
+#[test]
 fn search_continues_past_an_unusable_candidate() {
     let first = TempDir::new();
     let second = TempDir::new();
@@ -400,5 +418,31 @@ fn non_utf8_home_is_used_without_lossy_conversion() {
         .unwrap();
 
     assert_eq!(output.stdout, b"bytes");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn an_unset_home_uses_the_operating_system_user_database() {
+    let output = binary()
+        .env_remove("HOME")
+        .args(["path", "~", "--", "/bin/true"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn an_empty_home_uses_the_operating_system_user_database() {
+    let output = binary()
+        .env("HOME", "")
+        .args(["path", "~", "--", "/bin/true"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }

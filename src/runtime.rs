@@ -40,6 +40,13 @@ impl RunError {
 }
 
 pub fn run(arguments: Arguments) -> Result<(), RunError> {
+    run_with(arguments, replace_process)
+}
+
+fn run_with(
+    arguments: Arguments,
+    replace: impl FnOnce(&OsStr, &[OsString]) -> io::Error,
+) -> Result<(), RunError> {
     if let Some(directory) = arguments.chdir {
         let directory = expand_tilde(&directory)
             .map_err(|source| diagnostic("expand", directory, source, 1))?;
@@ -94,7 +101,7 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
         }
     };
 
-    let error = replace_process(&program, &child_arguments);
+    let error = replace(&program, &child_arguments);
     let code = match error.kind() {
         io::ErrorKind::NotFound => 127,
         io::ErrorKind::PermissionDenied => 126,
@@ -217,7 +224,18 @@ fn is_invokable(metadata: &fs::Metadata) -> bool {
 fn expand_tilde(path: &OsStr) -> io::Result<PathBuf> {
     // The specification requires the standard library's Unix account-database fallback.
     #[allow(deprecated)]
-    expand_tilde_with(path, env::home_dir)
+    expand_tilde_with(path, || {
+        if env::var_os("HOME").is_some_and(|value| value.is_empty()) {
+            // std::env::home_dir treats an empty HOME as a path, so hide it only while asking
+            // for the account-database fallback and restore it before executing the child.
+            env::remove_var("HOME");
+            let home = env::home_dir();
+            env::set_var("HOME", "");
+            home
+        } else {
+            env::home_dir()
+        }
+    })
 }
 
 fn expand_tilde_with(path: &OsStr, home: impl FnOnce() -> Option<PathBuf>) -> io::Result<PathBuf> {
@@ -291,5 +309,36 @@ mod tests {
     fn rejects_an_empty_home_from_the_user_database() {
         let error = expand_tilde_with(OsStr::new("~/path"), || Some(PathBuf::new())).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn an_executable_disappearing_after_resolution_exits_127() {
+        let root = env::temp_dir().join(format!(
+            "run-if-present-disappearance-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let executable = root.join("tool");
+        fs::write(&executable, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let arguments = Arguments {
+            chdir: None,
+            condition: Condition::Command {
+                command: executable.clone().into_os_string(),
+                arguments: Vec::new(),
+            },
+        };
+
+        let result = run_with(arguments, |program, arguments| {
+            fs::remove_file(program).unwrap();
+            replace_process(program, arguments)
+        });
+        let error = match result {
+            Ok(()) => panic!("a disappeared executable must not succeed"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), 127);
+        fs::remove_dir_all(root).unwrap();
     }
 }
