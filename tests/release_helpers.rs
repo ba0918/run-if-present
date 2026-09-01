@@ -85,6 +85,7 @@ case "$1 $2" in
     ;;
   "release upload") cp "$4" "$GH_STATE/assets/$(basename "$4")" ;;
   "release create") : ;;
+  "release edit") : ;;
   *) exit 64 ;;
 esac
 "#,
@@ -102,6 +103,21 @@ fn reconcile_release(root: &Path) -> std::process::Output {
     Command::new("bash")
         .arg(".github/scripts/reconcile-github-release.sh")
         .args(["v0.1.0", expected.to_str().unwrap()])
+        .env("PATH", path)
+        .env("GH_STATE", root.join("github-state"))
+        .env("GH_LOG", root.join("github.log"))
+        .output()
+        .unwrap()
+}
+
+fn publish_release(root: &Path) -> std::process::Output {
+    let expected = root.join("expected");
+    let mut path = root.join("bin").into_os_string();
+    path.push(":");
+    path.push(std::env::var_os("PATH").unwrap());
+    Command::new("bash")
+        .arg(".github/scripts/reconcile-github-release.sh")
+        .args(["v0.1.0", expected.to_str().unwrap(), "--publish"])
         .env("PATH", path)
         .env("GH_STATE", root.join("github-state"))
         .env("GH_LOG", root.join("github.log"))
@@ -152,8 +168,83 @@ fn reusable_verification_keeps_all_dependency_consumers_locked() {
         "cargo clippy --all-targets --all-features --locked -- -D warnings",
         "cargo package --locked",
     ] {
-        assert!(workflow.contains(command), "missing locked command: {command}");
+        assert!(
+            workflow.contains(command),
+            "missing locked command: {command}"
+        );
     }
+}
+
+#[test]
+fn final_release_job_reconciles_downloaded_assets_before_publishing() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").unwrap();
+    let publish_job = workflow.split("  publish-release:").nth(1).unwrap();
+
+    assert!(publish_job.contains("name: release-assets"));
+    assert!(publish_job.contains("path: release-assets"));
+    assert!(publish_job.contains("reconcile-github-release.sh"));
+    assert!(publish_job.contains("--publish"));
+    assert!(!publish_job.contains("gh release edit"));
+}
+
+#[test]
+fn final_publish_rejects_mismatched_assets_without_editing() {
+    let root = fixture();
+    let expected = root.join("expected");
+    fs::create_dir(&expected).unwrap();
+    fs::write(expected.join("archive.tar.gz"), b"expected").unwrap();
+    github_release_fixture(
+        &root,
+        r#"{"tagName":"v0.1.0","isDraft":true,"assets":[{"name":"archive.tar.gz"}]}"#,
+        b"different",
+    );
+
+    let output = publish_release(&root);
+
+    assert!(!output.status.success());
+    let operations = fs::read_to_string(root.join("github.log")).unwrap();
+    assert!(!operations.contains("release edit"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn final_publish_edits_a_matching_draft_once() {
+    let root = fixture();
+    let expected = root.join("expected");
+    fs::create_dir(&expected).unwrap();
+    fs::write(expected.join("archive.tar.gz"), b"same").unwrap();
+    github_release_fixture(
+        &root,
+        r#"{"tagName":"v0.1.0","isDraft":true,"assets":[{"name":"archive.tar.gz"}]}"#,
+        b"same",
+    );
+
+    let output = publish_release(&root);
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let operations = fs::read_to_string(root.join("github.log")).unwrap();
+    assert_eq!(operations.matches("release edit").count(), 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn final_publish_keeps_a_matching_public_release_unchanged() {
+    let root = fixture();
+    let expected = root.join("expected");
+    fs::create_dir(&expected).unwrap();
+    fs::write(expected.join("archive.tar.gz"), b"same").unwrap();
+    github_release_fixture(
+        &root,
+        r#"{"tagName":"v0.1.0","isDraft":false,"assets":[{"name":"archive.tar.gz"}]}"#,
+        b"same",
+    );
+
+    let output = publish_release(&root);
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let operations = fs::read_to_string(root.join("github.log")).unwrap();
+    assert!(!operations.contains("release edit"));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
