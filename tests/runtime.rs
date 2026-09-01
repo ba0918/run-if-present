@@ -16,6 +16,18 @@ fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_run-if-present"))
 }
 
+fn command_with_sigpipe_ignored(program: &str, arguments: &[&str]) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.args([
+        "-c",
+        "trap '' PIPE; exec \"$@\"",
+        "sigpipe-ignoring-parent",
+        program,
+    ]);
+    command.args(arguments);
+    command
+}
+
 fn permission_test_binary(temp: &TempDir) -> Command {
     unsafe extern "C" {
         fn geteuid() -> u32;
@@ -552,6 +564,25 @@ fn child_sigpipe_disposition_matches_direct_execution() {
     assert!(direct.stdout.is_empty());
     assert_eq!(wrapped.status.signal(), Some(13));
     assert!(wrapped.stdout.is_empty());
+}
+
+#[test]
+fn child_inherits_an_explicitly_ignored_sigpipe_like_direct_execution() {
+    let script = "kill -PIPE $$; printf ignored";
+    let direct = command_with_sigpipe_ignored("/bin/sh", &["-c", script])
+        .output()
+        .unwrap();
+    let wrapped = command_with_sigpipe_ignored(
+        env!("CARGO_BIN_EXE_run-if-present"),
+        &["path", "/bin", "--", "/bin/sh", "-c", script],
+    )
+    .output()
+    .unwrap();
+
+    assert_eq!(direct.status.code(), Some(0));
+    assert_eq!(direct.stdout, b"ignored");
+    assert_eq!(wrapped.status.code(), Some(0));
+    assert_eq!(wrapped.stdout, b"ignored");
 }
 
 #[test]

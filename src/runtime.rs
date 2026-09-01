@@ -5,8 +5,73 @@ use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::cli::{Arguments, Condition};
+
+const SIGPIPE: i32 = 13;
+const SIG_DFL: usize = 0;
+const SIG_IGN: usize = 1;
+const SIG_ERR: usize = usize::MAX;
+const SIGPIPE_UNKNOWN: u8 = 0;
+const SIGPIPE_DEFAULT: u8 = 1;
+const SIGPIPE_IGNORED: u8 = 2;
+const SIGPIPE_CAPTURE_FAILED: u8 = 3;
+
+static INHERITED_SIGPIPE: AtomicU8 = AtomicU8::new(SIGPIPE_UNKNOWN);
+
+unsafe extern "C" {
+    fn signal(signal: i32, handler: usize) -> usize;
+}
+
+// Rust changes SIGPIPE before main, but exec must preserve a parent's explicit SIG_IGN. This
+// loader constructor runs before Rust lang_start and records only the disposition semantics that
+// survive exec: ignored remains ignored, while default and caught handlers become default.
+#[used]
+#[cfg_attr(target_os = "linux", link_section = ".init_array")]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
+static CAPTURE_INHERITED_SIGPIPE: unsafe extern "C" fn() = capture_inherited_sigpipe;
+
+unsafe extern "C" fn capture_inherited_sigpipe() {
+    let inherited = unsafe { signal(SIGPIPE, SIG_IGN) };
+    if inherited == SIG_ERR {
+        INHERITED_SIGPIPE.store(SIGPIPE_CAPTURE_FAILED, Ordering::Relaxed);
+        return;
+    }
+    let disposition = if inherited == SIG_IGN {
+        SIGPIPE_IGNORED
+    } else {
+        SIGPIPE_DEFAULT
+    };
+    if unsafe { signal(SIGPIPE, inherited) } == SIG_ERR {
+        INHERITED_SIGPIPE.store(SIGPIPE_CAPTURE_FAILED, Ordering::Relaxed);
+        return;
+    }
+    INHERITED_SIGPIPE.store(disposition, Ordering::Relaxed);
+}
+
+fn restore_inherited_sigpipe_for_exec() -> io::Result<()> {
+    let handler = match INHERITED_SIGPIPE.load(Ordering::Relaxed) {
+        SIGPIPE_DEFAULT => SIG_DFL,
+        SIGPIPE_IGNORED => SIG_IGN,
+        SIGPIPE_UNKNOWN => {
+            return Err(io::Error::other(
+                "SIGPIPE disposition constructor did not run",
+            ));
+        }
+        SIGPIPE_CAPTURE_FAILED => {
+            return Err(io::Error::other(
+                "could not capture the inherited SIGPIPE disposition",
+            ));
+        }
+        _ => return Err(io::Error::other("invalid captured SIGPIPE disposition")),
+    };
+    if unsafe { signal(SIGPIPE, handler) } == SIG_ERR {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
 
 pub enum RunError {
     Diagnostic {
@@ -95,7 +160,7 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
     };
 
     let error = match replace_process(&program, &child_arguments) {
-        ReplaceProcessError::ResetSignal(source) => {
+        ReplaceProcessError::RestoreSignal(source) => {
             return Err(diagnostic("prepare execution", program, source, 1));
         }
         ReplaceProcessError::Execute(error) => error,
@@ -110,7 +175,7 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
 }
 
 enum ReplaceProcessError {
-    ResetSignal(io::Error),
+    RestoreSignal(io::Error),
     Execute(io::Error),
 }
 
@@ -142,16 +207,10 @@ fn replace_process(program: &OsStr, arguments: &[OsString]) -> ReplaceProcessErr
             argv: *const *const c_char,
             envp: *const *const c_char,
         ) -> i32;
-        fn signal(signal: i32, handler: usize) -> usize;
     }
 
-    // Rust ignores SIGPIPE at startup. Preserving that across exec would make the target behave
-    // differently from direct execution, so restore the POSIX default at the last possible point.
-    const SIGPIPE: i32 = 13;
-    const SIG_DFL: usize = 0;
-    const SIG_ERR: usize = usize::MAX;
-    if unsafe { signal(SIGPIPE, SIG_DFL) } == SIG_ERR {
-        return ReplaceProcessError::ResetSignal(io::Error::last_os_error());
+    if let Err(error) = restore_inherited_sigpipe_for_exec() {
+        return ReplaceProcessError::RestoreSignal(error);
     }
 
     // Direct execve avoids execvp's shell fallback for executable-format errors.
