@@ -22,15 +22,31 @@ cargo install run-if-present --version 0.1.0
 ```
 
 GitHub release archives, once published, contain the executable, this README, and both license
-files. Verify every downloaded archive before extracting it:
+files. Choose the target that matches the output of `uname -m` and `uname -s`:
+
+| System | Target archive suffix |
+| --- | --- |
+| x86_64 Linux | `x86_64-unknown-linux-musl` |
+| arm64 or aarch64 Linux | `aarch64-unknown-linux-musl` |
+| x86_64 macOS | `x86_64-apple-darwin` |
+| arm64 macOS | `aarch64-apple-darwin` |
+
+Download that one archive and `SHA256SUMS` from the same GitHub Release. For example, after
+downloading the x86_64 Linux files for version 0.1.0, verify only the selected archive, extract it,
+and install the executable in a directory on `PATH`:
 
 ```sh
-sha256sum -c SHA256SUMS
+archive=run-if-present-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+awk -v archive="$archive" '$2 == archive { print }' SHA256SUMS | sha256sum -c -
+tar -xzf "$archive"
+mkdir -p "$HOME/.local/bin"
+install -m 0755 "${archive%.tar.gz}/run-if-present" "$HOME/.local/bin/run-if-present"
+run-if-present --version
 ```
 
-On macOS, use `shasum -a 256 -c SHA256SUMS`. Initial macOS archives are unsigned and unnotarized;
-review the checksum and your local security policy before running one. `cargo install` is the
-source-built alternative.
+On macOS, use the same selection command with `shasum -a 256 -c -` in place of
+`sha256sum -c -`. Initial macOS archives are unsigned and unnotarized; review the checksum and your
+local security policy before running one. `cargo install` is the source-built alternative.
 
 ## Usage
 
