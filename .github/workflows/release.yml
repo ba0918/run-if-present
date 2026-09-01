@@ -86,13 +86,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --json isDraft >/tmp/release.json 2>/dev/null; then
+          if gh release view "$GITHUB_REF_NAME" --json isDraft,assets >/tmp/release.json 2>/dev/null; then
+            [[ "$(jq -r .isDraft /tmp/release.json)" == true ]]
             mkdir existing-assets
-            gh release download "$GITHUB_REF_NAME" --dir existing-assets
-            for asset in release-assets/*; do
-              .github/scripts/verify-same-checksum.sh \
-                "$asset" "existing-assets/$(basename "$asset")"
-            done
+            if [[ "$(jq '.assets | length' /tmp/release.json)" -gt 0 ]]; then
+              gh release download "$GITHUB_REF_NAME" --dir existing-assets
+            fi
+            .github/scripts/select-missing-release-assets.sh \
+              release-assets existing-assets > /tmp/missing-release-assets
+            while IFS= read -r asset; do
+              gh release upload "$GITHUB_REF_NAME" "$asset"
+            done < /tmp/missing-release-assets
           else
             gh release create "$GITHUB_REF_NAME" release-assets/* \
               --verify-tag --draft --title "$GITHUB_REF_NAME" \

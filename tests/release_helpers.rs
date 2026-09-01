@@ -116,6 +116,45 @@ fn checksum_guard_accepts_equal_files_and_rejects_a_mismatch() {
 }
 
 #[test]
+fn a_partial_draft_keeps_matching_assets_and_selects_only_missing_assets() {
+    let root = fixture();
+    let expected = root.join("expected");
+    let existing = root.join("existing");
+    fs::create_dir(&expected).unwrap();
+    fs::create_dir(&existing).unwrap();
+    fs::write(expected.join("kept.tar.gz"), b"kept").unwrap();
+    fs::write(expected.join("missing.tar.gz"), b"missing").unwrap();
+    fs::write(existing.join("kept.tar.gz"), b"kept").unwrap();
+
+    let selection = Command::new("bash")
+        .arg(".github/scripts/select-missing-release-assets.sh")
+        .args([&expected, &existing])
+        .output()
+        .unwrap();
+
+    assert!(selection.status.success());
+    assert_eq!(
+        String::from_utf8(selection.stdout).unwrap(),
+        format!("{}\n", expected.join("missing.tar.gz").display())
+    );
+    assert_eq!(fs::read(existing.join("kept.tar.gz")).unwrap(), b"kept");
+
+    fs::copy(
+        expected.join("missing.tar.gz"),
+        existing.join("missing.tar.gz"),
+    )
+    .unwrap();
+    let completed = Command::new("bash")
+        .arg(".github/scripts/select-missing-release-assets.sh")
+        .args([&expected, &existing])
+        .output()
+        .unwrap();
+    assert!(completed.status.success());
+    assert!(completed.stdout.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn release_archive_has_the_uniform_layout() {
     let root = fixture();
     let output_dir = root.join("output");
