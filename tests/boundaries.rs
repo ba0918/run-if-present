@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn normal_dependency_graph_is_approved(tree: &str) -> bool {
-    const APPROVED: [&str; 17] = [
+    const APPROVED: [&str; 19] = [
         "anstream v1.0.0",
         "anstyle v1.0.14",
         "anstyle-parse v1.0.0",
@@ -16,12 +16,14 @@ fn normal_dependency_graph_is_approved(tree: &str) -> bool {
         "colorchoice v1.0.5",
         "heck v0.5.0",
         "is_terminal_polyfill v1.70.2",
+        "libc v0.2.189",
         "proc-macro2 v1.0.107",
         "quote v1.0.47",
         "strsim v0.11.1",
         "syn v3.0.4",
         "unicode-ident v1.0.24",
         "utf8parse v0.2.2",
+        "which v8.0.6",
     ];
     let approved = APPROVED
         .into_iter()
@@ -117,7 +119,8 @@ fn source_has_no_hidden_runtime_surface() {
 
     let manifest = fs::read_to_string(Path::new("Cargo.toml")).unwrap();
     assert!(manifest.contains("clap ="));
-    assert!(!manifest.contains("which ="));
+    assert!(manifest.contains("which = \"=8.0.6\""));
+    assert!(source.contains("which::which_in"));
 }
 
 #[test]
