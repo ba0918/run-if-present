@@ -431,6 +431,19 @@ fn release_metadata_rejects_items_left_in_unreleased_with_an_empty_release() {
 }
 
 #[test]
+fn release_metadata_rejects_unreleased_items_even_when_the_release_has_content() {
+    let root = fixture();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n- Still unreleased.\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
+    )
+    .unwrap();
+
+    assert!(!metadata(&root, "v0.1.0").status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn release_metadata_does_not_count_items_from_another_version() {
     let root = fixture();
     fs::write(
