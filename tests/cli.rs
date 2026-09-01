@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,24 +66,38 @@ fn accepts_a_hyphen_leading_path_guard_as_a_filesystem_value() {
 }
 
 #[test]
-fn path_keeps_known_wrapper_options_out_of_the_guard_value() {
+fn path_help_remains_wrapper_help() {
     let help = binary().args(["path", "--help"]).output().unwrap();
     assert_eq!(help.status.code(), Some(0));
     assert!(!help.stdout.is_empty());
     assert!(help.stderr.is_empty());
+}
+
+#[test]
+fn path_evaluates_hyphen_leading_guard_names_after_the_subcommand() {
+    let directory = temporary_directory();
 
     for guard in ["--chdir", "--version", "-h", "-V"] {
+        fs::write(directory.join(guard), b"present").unwrap();
         let output = binary()
-            .args(["path", guard, "--", "/bin/true"])
+            .current_dir(&directory)
+            .args([
+                "path",
+                guard,
+                "--",
+                "/bin/sh",
+                "-c",
+                "printf '%s' \"$1\"",
+                "guard-child",
+                guard,
+            ])
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{guard}");
-        assert!(output.stdout.is_empty(), "{guard}");
-        assert_eq!(
-            output.stderr, b"run-if-present: syntax: invalid command line\n",
-            "{guard}"
-        );
+        assert_eq!(output.status.code(), Some(0), "{guard}");
+        assert_eq!(output.stdout, guard.as_bytes(), "{guard}");
+        assert!(output.stderr.is_empty(), "{guard}");
     }
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
@@ -172,15 +187,8 @@ fn writes_command_help_to_stdout_before_a_command_begins() {
 }
 
 #[test]
-fn rejects_all_short_help_and_version_spellings() {
-    for arguments in [
-        vec!["-h"],
-        vec!["-V"],
-        vec!["command", "-h"],
-        vec!["command", "-V"],
-        vec!["path", "-h"],
-        vec!["path", "-V"],
-    ] {
+fn rejects_top_level_short_help_and_version_spellings() {
+    for arguments in [vec!["-h"], vec!["-V"]] {
         let output = binary().args(&arguments).output().unwrap();
         assert_eq!(output.status.code(), Some(2), "{arguments:?}");
         assert!(output.stdout.is_empty(), "{arguments:?}");
@@ -191,6 +199,26 @@ fn rejects_all_short_help_and_version_spellings() {
         );
         assert_eq!(diagnostic.lines().count(), 1, "{arguments:?}");
     }
+}
+
+#[test]
+fn command_resolves_short_hyphen_executable_names_after_the_subcommand() {
+    let directory = temporary_directory();
+    for name in ["-h", "-V"] {
+        let executable = directory.join(name);
+        fs::write(&executable, format!("#!/bin/sh\nprintf '%s' '{name}'\n")).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let output = binary()
+            .env("PATH", &directory)
+            .args(["command", name])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{name}");
+        assert_eq!(output.stdout, name.as_bytes(), "{name}");
+        assert!(output.stderr.is_empty(), "{name}");
+    }
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

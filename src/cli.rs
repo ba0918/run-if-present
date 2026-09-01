@@ -64,21 +64,6 @@ impl Arguments {
                 if arguments.is_empty() && command == "--help"
         )
     }
-
-    pub fn invalid_short_wrapper_option(&self) -> bool {
-        matches!(
-            &self.condition,
-            Condition::Command { command, .. } if command == "-h" || command == "-V"
-        )
-    }
-
-    pub fn invalid_path_wrapper_option(&self) -> bool {
-        matches!(
-            &self.condition,
-            Condition::Path { path, .. }
-                if path == "--chdir" || path == "--version" || path == "-h" || path == "-V"
-        )
-    }
 }
 
 #[cfg(test)]
