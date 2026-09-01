@@ -38,7 +38,7 @@ jobs:
           rustup toolchain install "${{ matrix.rust }}" --profile minimal
           rustup override set "${{ matrix.rust }}"
       - name: Run the full behavior suite
-        run: cargo test --all-targets --all-features
+        run: cargo test --all-targets --all-features --locked
 
   quality:
     name: Format, lint, and package (Rust 1.85.0)
@@ -58,6 +58,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
       - name: Reject lint warnings
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Verify package contents
-        run: cargo package
+        run: cargo package --locked

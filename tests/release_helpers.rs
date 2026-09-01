@@ -144,6 +144,19 @@ fn release_artifact_workflow_validates_ref_before_using_it() {
 }
 
 #[test]
+fn reusable_verification_keeps_all_dependency_consumers_locked() {
+    let workflow = fs::read_to_string(".github/workflows/verify.yml").unwrap();
+
+    for command in [
+        "cargo test --all-targets --all-features --locked",
+        "cargo clippy --all-targets --all-features --locked -- -D warnings",
+        "cargo package --locked",
+    ] {
+        assert!(workflow.contains(command), "missing locked command: {command}");
+    }
+}
+
+#[test]
 fn package_version_validation_rejects_shell_syntax_without_executing_it() {
     let root = fixture();
     let marker = root.join("must-not-exist");
