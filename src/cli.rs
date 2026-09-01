@@ -31,6 +31,7 @@ pub enum Condition {
     },
     #[command(disable_help_flag = true)]
     Path {
+        #[arg(allow_hyphen_values = true)]
         path: OsString,
 
         #[arg(last = true, required = true, num_args = 1.., allow_hyphen_values = true)]
@@ -68,6 +69,14 @@ impl Arguments {
         matches!(
             &self.condition,
             Condition::Command { command, .. } if command == "-h" || command == "-V"
+        )
+    }
+
+    pub fn invalid_path_wrapper_option(&self) -> bool {
+        matches!(
+            &self.condition,
+            Condition::Path { path, .. }
+                if path == "--chdir" || path == "--version" || path == "-h" || path == "-V"
         )
     }
 }

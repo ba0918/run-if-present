@@ -43,6 +43,10 @@ fn main() {
         eprintln!("run-if-present: syntax: short help and version options are not supported");
         std::process::exit(2);
     }
+    if arguments.invalid_path_wrapper_option() {
+        eprintln!("run-if-present: syntax: invalid command line");
+        std::process::exit(2);
+    }
     if arguments.invalid_empty_chdir() {
         eprintln!("run-if-present: syntax: chdir must not be empty");
         std::process::exit(2);

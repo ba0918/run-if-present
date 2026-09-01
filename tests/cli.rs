@@ -1,9 +1,22 @@
 use std::ffi::OsString;
+use std::fs;
 use std::os::unix::ffi::OsStringExt;
+use std::path::PathBuf;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_run-if-present"))
+}
+
+fn temporary_directory() -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("run-if-present-cli-{nonce}"));
+    fs::create_dir(&path).unwrap();
+    path
 }
 
 #[test]
@@ -28,6 +41,48 @@ fn rejects_an_empty_path_guard() {
         String::from_utf8_lossy(&output.stderr),
         "run-if-present: syntax: path must not be empty\n"
     );
+}
+
+#[test]
+fn accepts_a_hyphen_leading_path_guard_as_a_filesystem_value() {
+    let directory = temporary_directory();
+    let output = binary()
+        .current_dir(&directory)
+        .args([
+            "path",
+            "-definitely-absent",
+            "--",
+            "/bin/printf",
+            "must-not-run",
+        ])
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn path_keeps_known_wrapper_options_out_of_the_guard_value() {
+    let help = binary().args(["path", "--help"]).output().unwrap();
+    assert_eq!(help.status.code(), Some(0));
+    assert!(!help.stdout.is_empty());
+    assert!(help.stderr.is_empty());
+
+    for guard in ["--chdir", "--version", "-h", "-V"] {
+        let output = binary()
+            .args(["path", guard, "--", "/bin/true"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{guard}");
+        assert!(output.stdout.is_empty(), "{guard}");
+        assert_eq!(
+            output.stderr, b"run-if-present: syntax: invalid command line\n",
+            "{guard}"
+        );
+    }
 }
 
 #[test]
