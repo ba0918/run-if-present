@@ -4,7 +4,7 @@ use std::fs;
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::cli::{Arguments, Condition};
 
@@ -161,7 +161,7 @@ fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
     for directory in env::split_paths(&path) {
         let literal = literal_candidate(command, &directory, &cwd);
         if let Ok(discovered) = which::which_in(command, Some(&directory), &cwd) {
-            if discovered == literal {
+            if same_lexical_path_ignoring_curdir(&discovered, &literal) {
                 if let Some(candidate) = retain_search_result(
                     classify_search_candidate(discovered),
                     &mut inspection_error,
@@ -196,6 +196,14 @@ fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
     } else {
         Ok(None)
     }
+}
+
+fn same_lexical_path_ignoring_curdir(left: &Path, right: &Path) -> bool {
+    left.components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .eq(right
+            .components()
+            .filter(|component| !matches!(component, Component::CurDir)))
 }
 
 fn literal_candidate(command: &OsStr, directory: &Path, cwd: &Path) -> PathBuf {
@@ -332,6 +340,22 @@ fn escape_operand(value: &OsStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_path_comparison_ignores_only_curdir_components() {
+        assert!(same_lexical_path_ignoring_curdir(
+            Path::new("/work/./bin/tool"),
+            Path::new("/work/bin/tool")
+        ));
+        assert!(!same_lexical_path_ignoring_curdir(
+            Path::new("/work/link/../bin/tool"),
+            Path::new("/work/bin/tool")
+        ));
+        assert!(!same_lexical_path_ignoring_curdir(
+            Path::new("~/bin/tool"),
+            Path::new("/home/user/bin/tool")
+        ));
+    }
 
     #[test]
     fn expands_exact_tilde_without_utf8_conversion() {

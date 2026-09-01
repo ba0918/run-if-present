@@ -613,9 +613,27 @@ fn an_accessible_candidate_discovered_by_which_runs() {
     let temp = TempDir::new();
     let bin = temp.path().join("bin");
     fs::create_dir(&bin).unwrap();
+    let source = temp.path().join("argv0.c");
     let tool = bin.join("provider-tool");
-    fs::write(&tool, b"#!/bin/sh\nprintf %s \"$0\"").unwrap();
-    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        &source,
+        br#"#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc < 1) return 2;
+    size_t length = strlen(argv[0]);
+    return write(STDOUT_FILENO, argv[0], length) == (ssize_t)length ? 0 : 3;
+}
+"#,
+    )
+    .unwrap();
+    let compiler = Command::new("cc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&tool)
+        .output()
+        .unwrap();
+    assert!(compiler.status.success(), "{:?}", compiler.stderr);
 
     let output = binary()
         .env("PATH", "./bin")
