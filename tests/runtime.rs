@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::io::AsRawFd;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -187,6 +188,45 @@ fn an_absent_command_is_silent_success() {
 }
 
 #[test]
+fn an_unset_path_is_silent_success() {
+    let output = binary()
+        .env_remove("PATH")
+        .args(["command", "not-present"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn an_explicit_path_ignores_a_matching_path_candidate() {
+    let temp = TempDir::new();
+    temp.executable("tool", b"#!/bin/sh\nprintf wrong");
+    let output = binary()
+        .env("PATH", temp.path())
+        .args(["command", "./tool"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_shell_only_name_is_not_resolved() {
+    let temp = TempDir::new();
+    let output = binary()
+        .env("PATH", temp.path())
+        .args(["command", "cd"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn an_unusable_command_exits_126() {
     let temp = TempDir::new();
     fs::write(temp.path().join("tool"), b"not executable").unwrap();
@@ -259,6 +299,24 @@ fn search_continues_past_an_unusable_candidate() {
         .output()
         .unwrap();
 
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"usable");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn search_finds_a_usable_candidate_after_an_inspection_failure() {
+    let first = TempDir::new();
+    let second = TempDir::new();
+    let not_a_directory = first.path().join("not-a-directory");
+    fs::write(&not_a_directory, b"").unwrap();
+    second.executable("tool", b"#!/bin/sh\nprintf usable");
+    let path = std::env::join_paths([&not_a_directory, second.path()]).unwrap();
+    let output = binary()
+        .env("PATH", path)
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"usable");
     assert!(output.stderr.is_empty());
@@ -470,6 +528,87 @@ fn environment_is_preserved() {
 
     assert_eq!(output.stdout, b"preserved");
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn child_stderr_is_preserved() {
+    let output = binary()
+        .args(["path", "/bin", "--", "/bin/sh", "-c", "printf child-error >&2"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"child-error");
+}
+
+#[test]
+fn real_and_effective_credentials_are_preserved() {
+    for arguments in [["-u"], ["-ru"]] {
+        let expected = Command::new("id").args(arguments).output().unwrap();
+        let actual = binary()
+            .args(["path", "/bin", "--", "id"])
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert_eq!(actual.status.code(), Some(0));
+        assert_eq!(actual.stdout, expected.stdout);
+        assert!(actual.stderr.is_empty());
+    }
+}
+
+#[test]
+fn resource_limits_are_preserved() {
+    let expected = Command::new("/bin/sh")
+        .args(["-c", "ulimit -n"])
+        .output()
+        .unwrap();
+    let actual = binary()
+        .args(["path", "/bin", "--", "/bin/sh", "-c", "ulimit -n"])
+        .output()
+        .unwrap();
+    assert_eq!(actual.status.code(), Some(0));
+    assert_eq!(actual.stdout, expected.stdout);
+    assert!(actual.stderr.is_empty());
+}
+
+#[test]
+fn a_close_on_exec_descriptor_is_closed_before_the_child() {
+    let file = fs::File::open("Cargo.toml").unwrap();
+    let descriptor = file.as_raw_fd().to_string();
+    let output = binary()
+        .args([
+            "path",
+            "/bin",
+            "--",
+            "/bin/sh",
+            "-c",
+            "test ! -e \"/dev/fd/$1\"",
+            "sh",
+        ])
+        .arg(descriptor)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_non_utf8_diagnostic_escapes_control_bytes_and_includes_the_os_error() {
+    let operand = OsString::from_vec(vec![b'/', b'm', b'i', b's', b's', b'\t', 0xff]);
+    let output = binary()
+        .env("LC_ALL", "C")
+        .args(["path", "/bin", "--"])
+        .arg(operand)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(127));
+    assert!(output.stdout.is_empty());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(diagnostic.lines().count(), 1);
+    assert!(diagnostic.contains("\\t"));
+    assert!(diagnostic.contains("\\xff"));
+    assert!(diagnostic.contains("No such file or directory"));
 }
 
 #[test]
