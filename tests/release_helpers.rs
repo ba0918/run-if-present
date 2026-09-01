@@ -181,6 +181,19 @@ fn release_metadata_rejects_a_changelog_mismatch() {
 }
 
 #[test]
+fn release_metadata_compares_the_link_label_and_version_literally() {
+    let root = fixture();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## [0.1.0] - 2024-01-02\n\n[0x1y0]: https://example.invalid/compare/v0.0.0...v0x1y0\n",
+    )
+    .unwrap();
+
+    assert!(!metadata(&root, "v0.1.0").status.success());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn release_metadata_rejects_impossible_calendar_dates() {
     let root = fixture();
 

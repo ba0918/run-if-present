@@ -47,7 +47,14 @@ if ! awk -v prefix="$prefix" '
   exit 1
 fi
 
-if ! grep -Eq "^\[$version\]: https://.+v$version$" "$changelog"; then
+link_prefix="[$version]: https://"
+link_suffix="v$version"
+if ! awk -v prefix="$link_prefix" -v suffix="$link_suffix" '
+  index($0, prefix) == 1 &&
+    length($0) > length(prefix) + length(suffix) &&
+    substr($0, length($0) - length(suffix) + 1) == suffix { found = 1 }
+  END { exit !found }
+' "$changelog"; then
   echo "release metadata: changelog has no $version comparison link" >&2
   exit 1
 fi
