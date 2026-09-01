@@ -675,21 +675,88 @@ fn release_archive_has_the_uniform_layout() {
     assert_eq!(fs::read(&archive).unwrap(), fs::read(regenerated).unwrap());
     let listing = Command::new("tar")
         .args(["-tzf"])
-        .arg(archive)
+        .arg(&archive)
         .output()
         .unwrap();
     assert!(listing.status.success());
     let listing = String::from_utf8(listing.stdout).unwrap();
-    for name in [
-        "run-if-present",
-        "README.md",
-        "LICENSE-MIT",
-        "LICENSE-APACHE",
+    assert_eq!(
+        listing.lines().collect::<Vec<_>>(),
+        [
+            "run-if-present-v0.1.0-x86_64-unknown-linux-musl/",
+            "run-if-present-v0.1.0-x86_64-unknown-linux-musl/run-if-present",
+            "run-if-present-v0.1.0-x86_64-unknown-linux-musl/README.md",
+            "run-if-present-v0.1.0-x86_64-unknown-linux-musl/LICENSE-MIT",
+            "run-if-present-v0.1.0-x86_64-unknown-linux-musl/LICENSE-APACHE",
+        ]
+    );
+
+    let extracted = root.join("extracted");
+    fs::create_dir(&extracted).unwrap();
+    let extraction = Command::new("tar")
+        .args(["-xzf"])
+        .arg(&archive)
+        .args(["-C"])
+        .arg(&extracted)
+        .status()
+        .unwrap();
+    assert!(extraction.success());
+    let smoke = Command::new(
+        extracted
+            .join("run-if-present-v0.1.0-x86_64-unknown-linux-musl")
+            .join("run-if-present"),
+    )
+    .arg("--version")
+    .output()
+    .unwrap();
+    assert!(smoke.status.success());
+    assert_eq!(smoke.stdout, b"run-if-present 0.1.0\n");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_workflow_extracts_and_smoke_tests_each_native_archive_before_upload() {
+    let workflow = fs::read_to_string(".github/workflows/release-artifacts.yml").unwrap();
+    let archives = yaml_job_block(&workflow, "archives").unwrap();
+
+    for native_pair in [
+        "runner: ubuntu-24.04\n            target: x86_64-unknown-linux-musl",
+        "runner: ubuntu-24.04-arm\n            target: aarch64-unknown-linux-musl",
+        "runner: macos-15-intel\n            target: x86_64-apple-darwin",
+        "runner: macos-15\n            target: aarch64-apple-darwin",
+    ] {
+        assert!(archives.contains(native_pair), "missing {native_pair}");
+    }
+
+    let creation = archives
+        .find(".github/scripts/make-release-archive.sh")
+        .unwrap();
+    let archive_path = archives
+        .find("ARCHIVE=\"release-archive/run-if-present-v$VERSION-$TARGET.tar.gz\"")
+        .unwrap();
+    for expected_entry in [
+        "\"$ROOT/\"",
+        "\"$ROOT/run-if-present\"",
+        "\"$ROOT/README.md\"",
+        "\"$ROOT/LICENSE-MIT\"",
+        "\"$ROOT/LICENSE-APACHE\"",
     ] {
         assert!(
-            listing.lines().any(|entry| entry.ends_with(name)),
-            "missing {name}"
+            archives.contains(expected_entry),
+            "missing {expected_entry}"
         );
     }
-    fs::remove_dir_all(root).unwrap();
+    assert!(archives.contains("EXTRACTED=$(mktemp -d)"));
+    let extraction = archives.find("tar -xzf \"$ARCHIVE\"").unwrap();
+    let contained_smoke = archives
+        .find("\"$EXTRACTED/run-if-present-v$VERSION-$TARGET/run-if-present\" --version")
+        .unwrap();
+    let upload = archives
+        .find("uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02")
+        .unwrap();
+
+    assert!(creation < archive_path);
+    assert!(archive_path < extraction);
+    assert!(extraction < contained_smoke);
+    assert!(contained_smoke < upload);
 }

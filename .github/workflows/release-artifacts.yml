@@ -132,6 +132,19 @@ jobs:
           .github/scripts/make-release-archive.sh \
             "target/$TARGET/release/run-if-present" \
             "$VERSION" "$TARGET" release-archive
+          ARCHIVE="release-archive/run-if-present-v$VERSION-$TARGET.tar.gz"
+          ROOT="run-if-present-v$VERSION-$TARGET"
+          EXPECTED=$(printf '%s\n' \
+            "$ROOT/" \
+            "$ROOT/run-if-present" \
+            "$ROOT/README.md" \
+            "$ROOT/LICENSE-MIT" \
+            "$ROOT/LICENSE-APACHE")
+          [[ "$(tar -tzf "$ARCHIVE")" == "$EXPECTED" ]]
+          EXTRACTED=$(mktemp -d)
+          tar -xzf "$ARCHIVE" -C "$EXTRACTED"
+          "$EXTRACTED/run-if-present-v$VERSION-$TARGET/run-if-present" --version \
+            | grep -Fx "run-if-present $VERSION"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: archive-${{ matrix.target }}
