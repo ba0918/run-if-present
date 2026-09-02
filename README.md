@@ -9,20 +9,27 @@ dependency must still fail the hook.
 
 ## Install
 
+With [mise](https://mise.jdx.dev/), the `github` backend downloads the release archive for the
+current operating system and architecture and puts the executable on `PATH`:
+
+```sh
+mise use -g github:ba0918/run-if-present@0.1.0
+```
+
+To install from crates.io with a Rust toolchain:
+
+```sh
+cargo install run-if-present --version 0.1.0
+```
+
 To install the checked-out source:
 
 ```sh
 cargo install --path .
 ```
 
-After version 0.1.0 is published to crates.io, it can be installed with:
-
-```sh
-cargo install run-if-present --version 0.1.0
-```
-
-GitHub release archives, once published, contain the executable, this README, and both license
-files. Choose the target that matches the output of `uname -m` and `uname -s`:
+GitHub release archives contain the executable, this README, and both license files. Choose the
+target that matches the output of `uname -m` and `uname -s`:
 
 | System | Target archive suffix |
 | --- | --- |
