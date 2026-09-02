@@ -17,6 +17,14 @@ if ! "$script_dir/verify-package-version.sh" "$version" "$manifest" >/dev/null 2
 fi
 
 heading="## [$version] - "
+if awk '
+  /^##([[:space:]]|$)/ && /Unreleased/ && $0 != "## Unreleased" { malformed = 1 }
+  END { exit !malformed }
+' "$changelog"; then
+  echo "release metadata: Unreleased heading must be exactly '## Unreleased'" >&2
+  exit 1
+fi
+
 if ! awk -v heading="$heading" '
   function content(line) {
     if (line ~ /^[[:space:]]*$/) return 0
