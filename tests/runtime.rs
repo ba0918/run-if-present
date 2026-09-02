@@ -125,6 +125,21 @@ fn close_descriptor_before_exec(command: &mut Command, descriptor: i32) {
     }
 }
 
+// The loader variable that injects a fixture library into the wrapper would otherwise pass
+// through the wrapper's unchanged environment into the child it execs; on macOS dyld aborts a
+// system binary whose inserted dylib it cannot load. Each fixture removes the variable once it
+// is loaded, so the wrapper's pass-through of that one variable is not observed by any test.
+const UNSET_INJECTION_VARIABLE: &str = r#"
+__attribute__((constructor))
+static void unset_injection_variable(void) {
+#ifdef __APPLE__
+    unsetenv("DYLD_INSERT_LIBRARIES");
+#else
+    unsetenv("LD_PRELOAD");
+#endif
+}
+"#;
+
 fn process_boundary_interposer(temp: &TempDir) -> PathBuf {
     let source = temp.path().join("process-boundary.c");
     let library = if cfg!(target_os = "macos") {
@@ -156,7 +171,7 @@ static void unlink_disappearing_target(const char *path) {
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-{OPEN_CLOEXEC_DESCRIPTOR}
+{UNSET_INJECTION_VARIABLE}{OPEN_CLOEXEC_DESCRIPTOR}
 static int disappearing_execv(const char *path, char *const argv[]) {{
     unlink_disappearing_target(path);
     return execv(path, argv);
@@ -177,7 +192,7 @@ INTERPOSE(disappearing_execv, execv)
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-{OPEN_CLOEXEC_DESCRIPTOR}
+{UNSET_INJECTION_VARIABLE}{OPEN_CLOEXEC_DESCRIPTOR}
 typedef int (*execv_function)(const char *, char *const[]);
 int execv(const char *path, char *const argv[]) {{
     unlink_disappearing_target(path);
@@ -229,7 +244,9 @@ INTERPOSE(interposed_getpwuid, getpwuid)
     };
     let body = format!(
         r#"#include <pwd.h>
+#include <stdlib.h>
 #include <sys/types.h>
+{UNSET_INJECTION_VARIABLE}
 static struct passwd record = {{ .pw_dir = "" }};
 struct passwd *{getpwuid_name}(uid_t uid) {{
     (void)uid;
@@ -304,6 +321,7 @@ INTERPOSE(interposed_execv, execv)
 #include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
+{UNSET_INJECTION_VARIABLE}
 static int close_armed = -1;
 static int requested_descriptor(const char *name, int descriptor) {{
     const char *value = getenv(name);
@@ -408,6 +426,8 @@ INTERPOSE(interposed_signal, signal)
         r#"#define _GNU_SOURCE
 #include <dlfcn.h>
 #include <signal.h>
+#include <stdlib.h>
+{UNSET_INJECTION_VARIABLE}
 typedef void (*signal_handler)(int);
 typedef signal_handler (*signal_function)(int, signal_handler);
 static int failed_capture = 0;
