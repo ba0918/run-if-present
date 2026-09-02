@@ -17,14 +17,28 @@ const SIG_IGN: usize = 1;
 const SIG_ERR: usize = usize::MAX;
 const DESCRIPTOR_OPEN: i32 = 0;
 const DESCRIPTOR_CLOSED: i32 = -1;
-const DESCRIPTOR_UNKNOWN: i32 = -2;
+const DESCRIPTOR_CAPTURE_ERROR: i32 = -2;
+
+struct InheritedDescriptor {
+    state: AtomicI32,
+    error: AtomicI32,
+}
 
 // Holds the SIGPIPE disposition the wrapper was started with, or SIG_ERR when it is unknown.
 static INHERITED_SIGPIPE: AtomicUsize = AtomicUsize::new(SIG_ERR);
-static INHERITED_STANDARD_DESCRIPTORS: [AtomicI32; 3] = [
-    AtomicI32::new(DESCRIPTOR_UNKNOWN),
-    AtomicI32::new(DESCRIPTOR_UNKNOWN),
-    AtomicI32::new(DESCRIPTOR_UNKNOWN),
+static INHERITED_STANDARD_DESCRIPTORS: [InheritedDescriptor; 3] = [
+    InheritedDescriptor {
+        state: AtomicI32::new(DESCRIPTOR_CAPTURE_ERROR),
+        error: AtomicI32::new(0),
+    },
+    InheritedDescriptor {
+        state: AtomicI32::new(DESCRIPTOR_CAPTURE_ERROR),
+        error: AtomicI32::new(0),
+    },
+    InheritedDescriptor {
+        state: AtomicI32::new(DESCRIPTOR_CAPTURE_ERROR),
+        error: AtomicI32::new(0),
+    },
 ];
 
 unsafe extern "C" {
@@ -51,7 +65,7 @@ unsafe extern "C" fn capture_inherited_process_state() {
         INHERITED_SIGPIPE.store(inherited, Ordering::Relaxed);
     }
 
-    for (descriptor, state) in INHERITED_STANDARD_DESCRIPTORS.iter().enumerate() {
+    for (descriptor, inherited) in INHERITED_STANDARD_DESCRIPTORS.iter().enumerate() {
         let result = unsafe { fcntl(descriptor as i32, F_GETFD) };
         let captured = if result != -1 {
             DESCRIPTOR_OPEN
@@ -59,13 +73,12 @@ unsafe extern "C" fn capture_inherited_process_state() {
             let error = unsafe { current_errno() };
             if error == EBADF {
                 DESCRIPTOR_CLOSED
-            } else if error > 0 {
-                error
             } else {
-                DESCRIPTOR_UNKNOWN
+                inherited.error.store(error, Ordering::Relaxed);
+                DESCRIPTOR_CAPTURE_ERROR
             }
         };
-        state.store(captured, Ordering::Relaxed);
+        inherited.state.store(captured, Ordering::Relaxed);
     }
 }
 
@@ -93,20 +106,19 @@ fn restore_inherited_sigpipe() -> io::Result<()> {
 }
 
 fn restore_inherited_standard_descriptors() -> io::Result<()> {
-    for (descriptor, state) in INHERITED_STANDARD_DESCRIPTORS.iter().enumerate() {
-        match state.load(Ordering::Relaxed) {
+    for (descriptor, inherited) in INHERITED_STANDARD_DESCRIPTORS.iter().enumerate() {
+        match inherited.state.load(Ordering::Relaxed) {
             DESCRIPTOR_OPEN => {}
             DESCRIPTOR_CLOSED => {
                 if unsafe { close(descriptor as i32) } == -1 {
                     return Err(io::Error::last_os_error());
                 }
             }
-            DESCRIPTOR_UNKNOWN => {
-                return Err(io::Error::other(
-                    "could not capture an inherited standard descriptor state",
-                ));
+            DESCRIPTOR_CAPTURE_ERROR => {
+                let error = inherited.error.load(Ordering::Relaxed);
+                return Err(io::Error::from_raw_os_error(error));
             }
-            error => return Err(io::Error::from_raw_os_error(error)),
+            _ => unreachable!(),
         }
     }
     Ok(())

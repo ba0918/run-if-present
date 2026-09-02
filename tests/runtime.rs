@@ -309,6 +309,10 @@ int {fcntl_name}(int descriptor, int command, ...) {{
             errno = EIO;
             return -1;
         }}
+        if (requested_descriptor("RUN_IF_PRESENT_FAIL_FCNTL_WITH_ZERO_ERRNO_FD", descriptor)) {{
+            errno = 0;
+            return -1;
+        }}
         int result = real_fcntl(descriptor, command);
         if (result == -1 && errno == EBADF &&
             requested_descriptor("RUN_IF_PRESENT_FAIL_CLOSE_FD", descriptor)) {{
@@ -1590,6 +1594,25 @@ fn a_descriptor_capture_failure_is_a_prepare_execution_error() {
     let diagnostic = String::from_utf8(output.stderr).unwrap();
     assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/bin/true\":"));
     assert!(diagnostic.contains(&io::Error::from_raw_os_error(5).to_string()));
+}
+
+#[test]
+fn a_descriptor_capture_failure_with_zero_errno_uses_operating_system_error_text() {
+    let temp = TempDir::new();
+    let interposer = descriptor_state_interposer(&temp);
+    let mut command = binary();
+    command
+        .env("RUN_IF_PRESENT_FAIL_FCNTL_WITH_ZERO_ERRNO_FD", "0")
+        .args(["command", "/bin/true"]);
+    preload(&mut command, &interposer);
+
+    let output = command.output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/bin/true\":"));
+    assert!(diagnostic.contains(&io::Error::from_raw_os_error(0).to_string()));
 }
 
 #[test]

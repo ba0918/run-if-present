@@ -84,6 +84,24 @@ fn source_has_no_hidden_runtime_surface() {
 }
 
 #[test]
+fn diagnostic_reasons_are_limited_to_the_contract() {
+    let source = runtime_source();
+    let approved = [
+        "home directory is unavailable",
+        "command not found",
+        "not an executable regular file",
+        "could not capture the inherited SIGPIPE disposition",
+    ];
+    let fixed_reason_count =
+        source.matches("io::Error::new(").count() + source.matches("io::Error::other(").count();
+
+    assert_eq!(fixed_reason_count, approved.len());
+    for reason in approved {
+        assert!(source.contains(&format!("\"{reason}\"")), "{reason}");
+    }
+}
+
+#[test]
 fn locked_normal_dependency_tree_contains_only_approved_crates() {
     let output = Command::new("cargo")
         .args(["tree", "--locked", "--edges", "normal", "--prefix", "none"])
