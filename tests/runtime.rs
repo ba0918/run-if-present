@@ -10,11 +10,10 @@ use std::process::{Command, Output, Stdio};
 
 mod common;
 
-use common::{closed_pipe_writer, non_utf8_entry, TempDir};
-
-fn binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_run-if-present"))
-}
+use common::{
+    assert_diagnostic, assert_operand_diagnostic, assert_silent_success, assert_success_output,
+    binary, closed_pipe_writer, non_utf8_entry, output_report, run, TempDir,
+};
 
 fn status_with_closed_stderr(mut command: Command) -> std::process::ExitStatus {
     command
@@ -58,22 +57,8 @@ fn permission_test_binary(temp: &TempDir) -> Command {
 }
 
 fn assert_permission_diagnostic(output: &Output, operation: &str) {
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    let diagnostic = String::from_utf8(output.stderr.clone()).unwrap();
-    assert_eq!(diagnostic.lines().count(), 1);
-    assert!(diagnostic.starts_with(&format!("run-if-present: {operation}:")));
+    let diagnostic = assert_diagnostic(output, 1, operation);
     assert!(diagnostic.contains(&io::Error::from_raw_os_error(13).to_string()));
-}
-
-fn output_report(output: &Output) -> String {
-    format!(
-        "exit code {:?}, signal {:?}, stdout {:?}, stderr {:?}",
-        output.status.code(),
-        output.status.signal(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    )
 }
 
 fn compile_c_program(temp: &TempDir, output: &Path, source: &[u8]) {
@@ -293,14 +278,9 @@ fn preload(command: &mut Command, library: &Path) {
 
 #[test]
 fn a_present_path_runs_the_command_and_preserves_its_output() {
-    let output = binary()
-        .args(["path", "/bin", "--", "/usr/bin/printf", "present"])
-        .output()
-        .unwrap();
+    let output = run(["path", "/bin", "--", "/usr/bin/printf", "present"]);
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"present");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"present");
 }
 
 #[test]
@@ -313,9 +293,7 @@ fn an_absent_path_is_silent_success() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -331,9 +309,7 @@ fn a_path_guard_through_a_regular_file_is_confirmed_absent() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -351,9 +327,7 @@ fn a_path_guard_with_a_trailing_slash_on_a_regular_file_is_confirmed_absent() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -369,9 +343,7 @@ fn a_dangling_link_is_silent_success() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -387,9 +359,7 @@ fn a_link_loop_is_an_inspection_failure() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: inspect:"));
+    assert_diagnostic(&output, 1, "inspect");
 }
 
 #[test]
@@ -415,17 +385,9 @@ fn a_permission_denied_path_guard_is_an_inspection_failure() {
 #[test]
 fn a_present_guard_does_not_hide_a_missing_launch_target() {
     let program = "/definitely/not/present";
-    let output = binary()
-        .args(["path", "/bin", "--", program])
-        .output()
-        .unwrap();
+    let output = run(["path", "/bin", "--", program]);
 
-    assert_eq!(output.status.code(), Some(127));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("run-if-present: execute: \"{program}\": command not found\n")
-    );
+    assert_operand_diagnostic(&output, 127, "execute", program, "command not found");
 }
 
 #[test]
@@ -443,11 +405,10 @@ fn an_uninvokable_explicit_launch_target_has_the_command_mode_diagnostic() {
         .output()
         .unwrap();
 
-    assert_eq!(command_mode.status.code(), Some(126));
+    let diagnostic = assert_diagnostic(&command_mode, 126, "resolve executable");
+    assert!(diagnostic.contains("not an executable regular file"));
     assert_eq!(path_mode.status.code(), Some(126));
     assert_eq!(path_mode.stderr, command_mode.stderr);
-    assert!(String::from_utf8_lossy(&path_mode.stderr).contains("resolve executable"));
-    assert!(String::from_utf8_lossy(&path_mode.stderr).contains("not an executable regular file"));
 }
 
 #[test]
@@ -465,15 +426,7 @@ fn an_explicit_launch_target_through_a_regular_file_is_command_not_found() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(127));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!(
-            "run-if-present: execute: \"{}\": command not found\n",
-            program.display()
-        )
-    );
+    assert_operand_diagnostic(&output, 127, "execute", &program, "command not found");
 }
 
 #[test]
@@ -484,9 +437,7 @@ fn an_absent_command_is_silent_success() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -501,9 +452,7 @@ fn a_symbolic_link_to_an_executable_is_selected_from_path() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"linked");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"linked");
 }
 
 #[test]
@@ -517,9 +466,7 @@ fn a_dangling_symbolic_link_is_no_path_candidate() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -534,9 +481,7 @@ fn an_empty_path_entry_names_the_effective_working_directory() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"local");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"local");
 }
 
 #[test]
@@ -547,12 +492,7 @@ fn a_bare_launch_target_without_a_candidate_is_command_not_found() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(127));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "run-if-present: execute: \"not-present\": command not found\n"
-    );
+    assert_operand_diagnostic(&output, 127, "execute", "not-present", "command not found");
 }
 
 #[test]
@@ -562,9 +502,7 @@ fn an_unset_path_is_silent_success() {
         .args(["command", "not-present"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -576,9 +514,7 @@ fn an_explicit_path_ignores_a_matching_path_candidate() {
         .args(["command", "./tool"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -589,9 +525,7 @@ fn a_shell_only_name_is_not_resolved() {
         .args(["command", "cd"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -622,9 +556,7 @@ fn a_path_entry_through_a_regular_file_contributes_no_candidate() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -639,9 +571,7 @@ fn an_explicit_command_through_a_regular_file_is_confirmed_absent() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -679,9 +609,7 @@ fn an_inspection_failure_does_not_hide_a_later_usable_candidate() {
         .unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"usable");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"usable");
 }
 
 #[test]
@@ -714,20 +642,11 @@ fn an_executable_disappearing_after_resolution_exits_127() {
         .env("RUN_IF_PRESENT_DISAPPEAR", &program)
         .arg("command")
         .arg(&program);
-    if cfg!(target_os = "macos") {
-        command.env("DYLD_INSERT_LIBRARIES", interposer);
-    } else {
-        command.env("LD_PRELOAD", interposer);
-    }
+    preload(&mut command, &interposer);
 
     let output = command.output().unwrap();
 
-    assert_eq!(output.status.code(), Some(127));
-    assert!(output.stdout.is_empty());
-    let diagnostic = String::from_utf8(output.stderr).unwrap();
-    assert!(diagnostic.starts_with("run-if-present: execute:"));
-    assert_eq!(diagnostic.lines().count(), 1);
-    assert!(diagnostic.ends_with('\n'));
+    assert_diagnostic(&output, 127, "execute");
     assert!(!program.exists());
 }
 
@@ -745,9 +664,7 @@ fn search_continues_past_an_unusable_candidate() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"usable");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"usable");
 }
 
 #[test]
@@ -763,9 +680,7 @@ fn search_continues_past_a_path_entry_that_is_a_regular_file() {
         .args(["command", "tool"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"usable");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"usable");
 }
 
 #[test]
@@ -798,9 +713,7 @@ fn a_missing_chdir_is_silent_success() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -816,9 +729,7 @@ fn a_chdir_target_through_a_regular_file_is_confirmed_absent() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -836,9 +747,7 @@ fn a_chdir_target_with_a_trailing_slash_on_a_regular_file_is_confirmed_absent() 
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -854,9 +763,7 @@ fn an_existing_regular_file_chdir_is_visible() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: chdir:"));
+    assert_diagnostic(&output, 1, "chdir");
 }
 
 #[test]
@@ -901,10 +808,7 @@ fn an_executable_format_failure_exits_126() {
 
 #[test]
 fn child_exit_status_is_preserved() {
-    let output = binary()
-        .args(["path", "/bin", "--", "/bin/sh", "-c", "exit 42"])
-        .output()
-        .unwrap();
+    let output = run(["path", "/bin", "--", "/bin/sh", "-c", "exit 42"]);
 
     assert_eq!(output.status.code(), Some(42));
 }
@@ -926,10 +830,7 @@ fn child_sigpipe_disposition_matches_direct_execution() {
         .args(["-c", script])
         .output()
         .unwrap();
-    let wrapped = binary()
-        .args(["path", "/bin", "--", "/bin/sh", "-c", script])
-        .output()
-        .unwrap();
+    let wrapped = run(["path", "/bin", "--", "/bin/sh", "-c", script]);
 
     assert_eq!(direct.status.signal(), Some(13));
     assert!(direct.stdout.is_empty());
@@ -993,8 +894,7 @@ fn tilde_guards_use_non_empty_home() {
         .output()
         .unwrap();
 
-    assert_eq!(output.stdout, b"expanded");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"expanded");
 }
 
 #[test]
@@ -1008,9 +908,7 @@ fn repeated_slashes_in_a_tilde_guard_do_not_escape_home() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -1048,13 +946,8 @@ fn diagnostic_operands_cannot_forge_a_new_line() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(127));
-    assert_eq!(
-        output.stderr.iter().filter(|byte| **byte == b'\n').count(),
-        1
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("\\nforged"));
-    assert!(!output.stderr.contains(&0x1b));
+    let diagnostic = assert_diagnostic(&output, 127, "execute");
+    assert!(diagnostic.contains("\\nforged"));
 }
 
 #[test]
@@ -1065,9 +958,7 @@ fn a_present_guard_resolves_a_bare_launch_target_from_path() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"resolved");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"resolved");
 }
 
 #[test]
@@ -1268,9 +1159,7 @@ int main(int argc, char **argv) {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"./bin/provider-tool");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"./bin/provider-tool");
 }
 
 #[test]
@@ -1290,9 +1179,7 @@ fn relative_path_entries_use_the_effective_directory() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"relative");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"relative");
 }
 
 #[test]
@@ -1319,9 +1206,7 @@ fn a_tilde_path_entry_is_literal_and_relative_to_the_effective_directory() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"effective");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"effective");
 }
 
 #[test]
@@ -1340,15 +1225,12 @@ fn an_executable_whose_execute_bit_is_unavailable_to_the_caller_exits_126() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(126));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!(
-            "run-if-present: execute: \"{}\": {}\n",
-            first_tool.display(),
-            io::Error::from_raw_os_error(13)
-        )
+    assert_operand_diagnostic(
+        &output,
+        126,
+        "execute",
+        &first_tool,
+        &io::Error::from_raw_os_error(13).to_string(),
     );
 }
 
@@ -1367,8 +1249,7 @@ fn environment_is_preserved() {
         .output()
         .unwrap();
 
-    assert_eq!(output.stdout, b"preserved");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"preserved");
 }
 
 #[test]
@@ -1474,17 +1355,14 @@ int main(int argc, char **argv) {
 
 #[test]
 fn child_stderr_is_preserved() {
-    let output = binary()
-        .args([
-            "path",
-            "/bin",
-            "--",
-            "/bin/sh",
-            "-c",
-            "printf child-error >&2",
-        ])
-        .output()
-        .unwrap();
+    let output = run([
+        "path",
+        "/bin",
+        "--",
+        "/bin/sh",
+        "-c",
+        "printf child-error >&2",
+    ]);
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
     assert_eq!(output.stderr, b"child-error");
@@ -1597,10 +1475,7 @@ fn resource_limits_are_preserved() {
         .args(["-c", "ulimit -n"])
         .output()
         .unwrap();
-    let actual = binary()
-        .args(["path", "/bin", "--", "/bin/sh", "-c", "ulimit -n"])
-        .output()
-        .unwrap();
+    let actual = run(["path", "/bin", "--", "/bin/sh", "-c", "ulimit -n"]);
     assert_eq!(actual.status.code(), Some(0));
     assert_eq!(actual.stdout, expected.stdout);
     assert!(actual.stderr.is_empty());
@@ -1624,18 +1499,11 @@ fn a_close_on_exec_descriptor_is_closed_before_the_child() {
             "-c",
             "test -n \"$RUN_IF_PRESENT_CLOEXEC_FD\" && test ! -e \"/dev/fd/$RUN_IF_PRESENT_CLOEXEC_FD\"",
         ]);
-    if cfg!(target_os = "macos") {
-        command.env("DYLD_INSERT_LIBRARIES", interposer);
-    } else {
-        command.env("LD_PRELOAD", interposer);
-    }
+    preload(&mut command, &interposer);
 
     let output = command.output().unwrap();
-    let report = output_report(&output);
 
-    assert_eq!(output.status.code(), Some(0), "{report}");
-    assert!(output.stdout.is_empty(), "{report}");
-    assert!(output.stderr.is_empty(), "{report}");
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -1647,10 +1515,7 @@ fn a_non_utf8_missing_launch_target_is_escaped_with_the_fixed_reason() {
         .arg(operand)
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(127));
-    assert!(output.stdout.is_empty());
-    let diagnostic = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(diagnostic.lines().count(), 1);
+    let diagnostic = assert_diagnostic(&output, 127, "execute");
     assert!(diagnostic.contains("\\t"));
     assert!(diagnostic.contains("\\xff"));
     assert!(diagnostic.contains("command not found"));
@@ -1658,13 +1523,9 @@ fn a_non_utf8_missing_launch_target_is_escaped_with_the_fixed_reason() {
 
 #[test]
 fn an_empty_child_argument_reaches_the_child() {
-    let output = binary()
-        .args(["path", "/bin", "--", "/usr/bin/printf", "[%s]", ""])
-        .output()
-        .unwrap();
+    let output = run(["path", "/bin", "--", "/usr/bin/printf", "[%s]", ""]);
 
-    assert_eq!(output.stdout, b"[]");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"[]");
 }
 
 #[test]
@@ -1682,8 +1543,7 @@ fn non_utf8_home_is_used_without_lossy_conversion() {
         .output()
         .unwrap();
 
-    assert_eq!(output.stdout, b"bytes");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"bytes");
 }
 
 #[test]
@@ -1694,9 +1554,7 @@ fn an_unset_home_uses_the_operating_system_user_database() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"database-home");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"database-home");
 }
 
 #[test]
@@ -1707,9 +1565,7 @@ fn an_empty_home_uses_the_operating_system_user_database() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, b"database-home");
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"database-home");
 }
 
 #[test]
@@ -1724,10 +1580,6 @@ fn an_empty_user_database_home_is_reported_by_the_cli() {
 
     let output = command.output().unwrap();
 
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    let diagnostic = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(diagnostic.lines().count(), 1);
-    assert!(diagnostic.starts_with("run-if-present: expand:"));
+    let diagnostic = assert_diagnostic(&output, 1, "expand");
     assert!(diagnostic.contains("home directory is unavailable"));
 }

@@ -1,16 +1,14 @@
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStringExt;
-use std::process::Command;
 use std::process::Stdio;
 
 mod common;
 
-use common::{closed_pipe_writer, TempDir};
-
-fn binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_run-if-present"))
-}
+use common::{
+    assert_diagnostic, assert_silent_success, assert_success_output, assert_syntax_diagnostic,
+    binary, closed_pipe_writer, run, TempDir,
+};
 
 fn output_with_closed_stdout(arguments: &[&str]) -> std::process::Output {
     binary()
@@ -22,26 +20,16 @@ fn output_with_closed_stdout(arguments: &[&str]) -> std::process::Output {
 
 #[test]
 fn rejects_an_empty_wrapper_command() {
-    let output = binary().args(["command", ""]).output().unwrap();
+    let output = run(["command", ""]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "run-if-present: syntax: command must not be empty\n"
-    );
+    assert_syntax_diagnostic(&output, "command must not be empty");
 }
 
 #[test]
 fn rejects_an_empty_path_guard() {
-    let output = binary().args(["path", "", "--", "true"]).output().unwrap();
+    let output = run(["path", "", "--", "true"]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "run-if-present: syntax: path must not be empty\n"
-    );
+    assert_syntax_diagnostic(&output, "path must not be empty");
 }
 
 #[test]
@@ -59,9 +47,7 @@ fn accepts_a_hyphen_leading_path_guard_as_a_filesystem_value() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_silent_success(&output);
 }
 
 #[test]
@@ -92,52 +78,30 @@ fn path_evaluates_hyphen_leading_guard_names_after_the_subcommand() {
 
 #[test]
 fn rejects_an_empty_chdir_value() {
-    let output = binary()
-        .args(["--chdir", "", "command", "true"])
-        .output()
-        .unwrap();
+    let output = run(["--chdir", "", "command", "true"]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "run-if-present: syntax: chdir must not be empty\n"
-    );
+    assert_syntax_diagnostic(&output, "chdir must not be empty");
 }
 
 #[test]
 fn requires_the_path_separator() {
-    let output = binary().args(["path", "guard", "true"]).output().unwrap();
+    let output = run(["path", "guard", "true"]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    let diagnostic = String::from_utf8_lossy(&output.stderr);
-    assert!(diagnostic.starts_with("run-if-present: syntax:"));
-    assert_eq!(diagnostic.lines().count(), 1);
-    assert!(!diagnostic.contains('\u{1b}'));
+    assert_diagnostic(&output, 2, "syntax");
 }
 
 #[test]
 fn rejects_a_missing_path_launch_command_after_the_separator() {
-    let output = binary().args(["path", "guard", "--"]).output().unwrap();
+    let output = run(["path", "guard", "--"]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    let diagnostic = String::from_utf8_lossy(&output.stderr);
-    assert!(diagnostic.starts_with("run-if-present: syntax:"));
-    assert_eq!(diagnostic.lines().count(), 1);
+    assert_diagnostic(&output, 2, "syntax");
 }
 
 #[test]
 fn rejects_an_empty_path_launch_command_as_invalid_syntax() {
-    let output = binary().args(["path", "/bin", "--", ""]).output().unwrap();
+    let output = run(["path", "/bin", "--", ""]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "run-if-present: syntax: command must not be empty\n"
-    );
+    assert_syntax_diagnostic(&output, "command must not be empty");
 }
 
 #[test]
@@ -159,28 +123,19 @@ fn writes_help_to_stdout() {
 fn rejects_the_unapproved_help_subcommand() {
     let output = binary().arg("help").output().unwrap();
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    let diagnostic = String::from_utf8_lossy(&output.stderr);
-    assert!(diagnostic.starts_with("run-if-present: syntax:"));
-    assert_eq!(diagnostic.lines().count(), 1);
+    assert_diagnostic(&output, 2, "syntax");
 }
 
 #[test]
 fn writes_version_to_stdout() {
     let output = binary().arg("--version").output().unwrap();
 
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "run-if-present 0.1.0\n"
-    );
-    assert!(output.stderr.is_empty());
+    assert_success_output(&output, b"run-if-present 0.1.0\n");
 }
 
 #[test]
 fn writes_command_help_to_stdout_before_a_command_begins() {
-    let output = binary().args(["command", "--help"]).output().unwrap();
+    let output = run(["command", "--help"]);
 
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
@@ -189,7 +144,7 @@ fn writes_command_help_to_stdout_before_a_command_begins() {
 
 #[test]
 fn writes_path_help_to_stdout_before_a_guard_begins() {
-    let output = binary().args(["path", "--help"]).output().unwrap();
+    let output = run(["path", "--help"]);
 
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
@@ -198,32 +153,16 @@ fn writes_path_help_to_stdout_before_a_guard_begins() {
 
 #[test]
 fn rejects_tokens_after_command_help() {
-    let output = binary()
-        .args(["command", "--help", "extra"])
-        .output()
-        .unwrap();
+    let output = run(["command", "--help", "extra"]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        output.stderr,
-        b"run-if-present: syntax: invalid command line\n"
-    );
+    assert_syntax_diagnostic(&output, "invalid command line");
 }
 
 #[test]
 fn rejects_tokens_after_path_help() {
-    let output = binary()
-        .args(["path", "--help", "extra", "--", "true"])
-        .output()
-        .unwrap();
+    let output = run(["path", "--help", "extra", "--", "true"]);
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        output.stderr,
-        b"run-if-present: syntax: invalid command line\n"
-    );
+    assert_syntax_diagnostic(&output, "invalid command line");
 }
 
 #[test]

@@ -1,14 +1,97 @@
 #![allow(dead_code)]
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The built wrapper, for tests that also set arguments piecewise, the environment, or the
+/// working directory.
+pub fn binary() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_run-if-present"))
+}
+
+/// Runs the built wrapper with `arguments` in the test's own environment and waits for it.
+pub fn run<I, S>(arguments: I) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    binary().args(arguments).output().unwrap()
+}
+
+/// Everything the wrapper left behind, for the message of a failed assertion.
+pub fn output_report(output: &Output) -> String {
+    format!(
+        "exit code {:?}, signal {:?}, stdout {:?}, stderr {:?}",
+        output.status.code(),
+        output.status.signal(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+/// Exit 0 with nothing on either stream: the wrapper skipped, or the child was silent.
+pub fn assert_silent_success(output: &Output) {
+    assert_success_output(output, b"");
+}
+
+/// Exit 0, exactly `stdout` on standard output, and nothing on standard error.
+pub fn assert_success_output(output: &Output, stdout: &[u8]) {
+    let report = output_report(output);
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert_eq!(output.stdout, stdout, "{report}");
+    assert!(output.stderr.is_empty(), "{report}");
+}
+
+/// Exit `code`, nothing on standard output, and one colorless diagnostic line on standard error
+/// naming `operation`. Returns the line so a test can check its operand or reason.
+pub fn assert_diagnostic(output: &Output, code: i32, operation: &str) -> String {
+    let report = output_report(output);
+    assert_eq!(output.status.code(), Some(code), "{report}");
+    assert!(output.stdout.is_empty(), "{report}");
+    let diagnostic = String::from_utf8(output.stderr.clone()).unwrap();
+    assert_eq!(diagnostic.matches('\n').count(), 1, "{report}");
+    assert!(diagnostic.ends_with('\n'), "{report}");
+    assert!(
+        diagnostic.starts_with(&format!("run-if-present: {operation}:")),
+        "{report}"
+    );
+    assert!(!diagnostic.contains('\u{1b}'), "{report}");
+    diagnostic
+}
+
+/// An operand diagnostic, byte for byte: `run-if-present: <operation>: "<operand>": <reason>`.
+pub fn assert_operand_diagnostic(
+    output: &Output,
+    code: i32,
+    operation: &str,
+    operand: impl AsRef<Path>,
+    reason: &str,
+) {
+    let diagnostic = assert_diagnostic(output, code, operation);
+    assert_eq!(
+        diagnostic,
+        format!(
+            "run-if-present: {operation}: \"{}\": {reason}\n",
+            operand.as_ref().display()
+        )
+    );
+}
+
+/// A syntax diagnostic, byte for byte: exit 2 and `run-if-present: syntax: <message>`.
+pub fn assert_syntax_diagnostic(output: &Output, message: &str) {
+    let diagnostic = assert_diagnostic(output, 2, "syntax");
+    assert_eq!(diagnostic, format!("run-if-present: syntax: {message}\n"));
+}
 
 pub fn closed_pipe_writer() -> OwnedFd {
     let (reader, writer) = UnixStream::pair().unwrap();
