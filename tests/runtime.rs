@@ -71,6 +71,22 @@ fn compile_c_program(temp: &TempDir, output: &Path, source: &[u8]) {
     assert!(compiler.status.success(), "{:?}", compiler.stderr);
 }
 
+// Writes its own argv[0] to stdout so the caller can compare it with a direct invocation.
+fn compile_argv0_reporter(temp: &TempDir, output: &Path) {
+    compile_c_program(
+        temp,
+        output,
+        br#"#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc < 1) return 2;
+    size_t length = strlen(argv[0]);
+    return write(STDOUT_FILENO, argv[0], length) == (ssize_t)length ? 0 : 3;
+}
+"#,
+    );
+}
+
 fn process_boundary_interposer(temp: &TempDir) -> PathBuf {
     let source = temp.path().join("process-boundary.c");
     let library = if cfg!(target_os = "macos") {
@@ -78,12 +94,7 @@ fn process_boundary_interposer(temp: &TempDir) -> PathBuf {
     } else {
         temp.path().join("libprocess-boundary.so")
     };
-    let body = if cfg!(target_os = "macos") {
-        r#"#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+    const OPEN_CLOEXEC_DESCRIPTOR: &str = r#"
 __attribute__((constructor))
 static void open_close_on_exec_descriptor(void) {
     if (getenv("RUN_IF_PRESENT_CLOEXEC_FD") != NULL) return;
@@ -95,44 +106,48 @@ static void open_close_on_exec_descriptor(void) {
     if (snprintf(value, sizeof(value), "%d", fd) < 0 ||
         setenv("RUN_IF_PRESENT_CLOEXEC_FD", value, 1) < 0) _exit(125);
 }
-static int disappearing_execv(const char *path, char *const argv[]) {
+static void unlink_disappearing_target(const char *path) {
     const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
     if (target != NULL && strcmp(path, target) == 0) unlink(path);
-    return execv(path, argv);
 }
+"#;
+    let body = if cfg!(target_os = "macos") {
+        format!(
+            r#"#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+{OPEN_CLOEXEC_DESCRIPTOR}
+static int disappearing_execv(const char *path, char *const argv[]) {{
+    unlink_disappearing_target(path);
+    return execv(path, argv);
+}}
 #define INTERPOSE(replacement, replacee) \
-    __attribute__((used)) static struct { const void *replacement_ptr; const void *replacee_ptr; } \
+    __attribute__((used)) static struct {{ const void *replacement_ptr; const void *replacee_ptr; }} \
     interpose_##replacee __attribute__((section("__DATA,__interpose"))) = \
-    { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee };
+    {{ (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee }};
 INTERPOSE(disappearing_execv, execv)
 "#
+        )
     } else {
-        r#"#define _GNU_SOURCE
+        format!(
+            r#"#define _GNU_SOURCE
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-__attribute__((constructor))
-static void open_close_on_exec_descriptor(void) {
-    if (getenv("RUN_IF_PRESENT_CLOEXEC_FD") != NULL) return;
-    const char *path = getenv("RUN_IF_PRESENT_OPEN_CLOEXEC");
-    if (path == NULL) return;
-    int fd = open(path, O_RDONLY);
-    if (fd < 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) _exit(125);
-    char value[32];
-    if (snprintf(value, sizeof(value), "%d", fd) < 0 ||
-        setenv("RUN_IF_PRESENT_CLOEXEC_FD", value, 1) < 0) _exit(125);
-}
+{OPEN_CLOEXEC_DESCRIPTOR}
 typedef int (*execv_function)(const char *, char *const[]);
-int execv(const char *path, char *const argv[]) {
-    const char *target = getenv("RUN_IF_PRESENT_DISAPPEAR");
-    if (target != NULL && strcmp(path, target) == 0) unlink(path);
+int execv(const char *path, char *const argv[]) {{
+    unlink_disappearing_target(path);
     execv_function real_execv = (execv_function)dlsym(RTLD_NEXT, "execv");
     return real_execv(path, argv);
-}
+}}
 "#
+        )
     };
     fs::write(&source, body).unwrap();
     let mut compiler = Command::new("cc");
@@ -684,18 +699,7 @@ fn explicit_launches_keep_the_caller_supplied_path_as_argv0() {
     let temp = TempDir::new();
     let token = "./explicit-argv0-reporter";
     let reporter = temp.path().join("explicit-argv0-reporter");
-    compile_c_program(
-        &temp,
-        &reporter,
-        br#"#include <string.h>
-#include <unistd.h>
-int main(int argc, char **argv) {
-    if (argc < 1) return 2;
-    size_t length = strlen(argv[0]);
-    return write(STDOUT_FILENO, argv[0], length) == (ssize_t)length ? 0 : 3;
-}
-"#,
-    );
+    compile_argv0_reporter(&temp, &reporter);
 
     let direct = Command::new(token)
         .current_dir(temp.path())
@@ -725,18 +729,7 @@ fn bare_launches_keep_the_same_argv0_as_direct_path_invocation() {
     let temp = TempDir::new();
     let name = "argv0-reporter";
     let reporter = temp.path().join(name);
-    compile_c_program(
-        &temp,
-        &reporter,
-        br#"#include <string.h>
-#include <unistd.h>
-int main(int argc, char **argv) {
-    if (argc < 1) return 2;
-    size_t length = strlen(argv[0]);
-    return write(STDOUT_FILENO, argv[0], length) == (ssize_t)length ? 0 : 3;
-}
-"#,
-    );
+    compile_argv0_reporter(&temp, &reporter);
 
     let direct = Command::new(name)
         .env("PATH", temp.path())
@@ -766,18 +759,7 @@ fn a_non_utf8_bare_command_is_preserved_as_argv0() {
     let temp = TempDir::new();
     let name = OsString::from_vec(b"argv0-\xff".to_vec());
     let reporter = temp.path().join(&name);
-    compile_c_program(
-        &temp,
-        &reporter,
-        br#"#include <string.h>
-#include <unistd.h>
-int main(int argc, char **argv) {
-    if (argc < 1) return 2;
-    size_t length = strlen(argv[0]);
-    return write(STDOUT_FILENO, argv[0], length) == (ssize_t)length ? 0 : 3;
-}
-"#,
-    );
+    compile_argv0_reporter(&temp, &reporter);
 
     let direct = Command::new(&name)
         .env("PATH", temp.path())
