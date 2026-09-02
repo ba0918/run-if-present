@@ -4,7 +4,7 @@ use std::fs;
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::cli::{Arguments, Condition};
@@ -173,23 +173,10 @@ fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
     let Some(path) = env::var_os("PATH").filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    let cwd =
-        env::current_dir().map_err(|source| diagnostic("working directory", ".", source, 1))?;
-
     let mut first_inspection_failure = None;
     let mut first_unusable = None;
     for directory in env::split_paths(&path) {
-        let literal = literal_candidate(command, &directory, &cwd);
-        // `which` expands a leading `~` in PATH entries and drops `.` components; the
-        // specification keeps PATH entries literal and relative to the effective directory, so
-        // its discovery counts only when it names the same file as the literal candidate.
-        let candidate = match which::which_in(command, Some(&directory), &cwd) {
-            Ok(discovered) if same_lexical_path_ignoring_curdir(&discovered, &literal) => {
-                discovered
-            }
-            _ => literal,
-        };
-        match classify(candidate) {
+        match classify(directory.join(command)) {
             Candidate::Invokable(found) => return Ok(Some(found)),
             Candidate::Absent => {}
             unusable @ Candidate::Unusable(_) => {
@@ -206,22 +193,6 @@ fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
             .or(first_unusable)
             .unwrap_or(Candidate::Absent),
     )
-}
-
-fn same_lexical_path_ignoring_curdir(left: &Path, right: &Path) -> bool {
-    left.components()
-        .filter(|component| !matches!(component, Component::CurDir))
-        .eq(right
-            .components()
-            .filter(|component| !matches!(component, Component::CurDir)))
-}
-
-fn literal_candidate(command: &OsStr, directory: &Path, cwd: &Path) -> PathBuf {
-    if directory.is_absolute() {
-        directory.join(command)
-    } else {
-        cwd.join(directory).join(command)
-    }
 }
 
 enum Candidate {
@@ -376,22 +347,6 @@ fn escape_operand(value: &OsStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn provider_path_comparison_ignores_only_curdir_components() {
-        assert!(same_lexical_path_ignoring_curdir(
-            Path::new("/work/./bin/tool"),
-            Path::new("/work/bin/tool")
-        ));
-        assert!(!same_lexical_path_ignoring_curdir(
-            Path::new("/work/link/../bin/tool"),
-            Path::new("/work/bin/tool")
-        ));
-        assert!(!same_lexical_path_ignoring_curdir(
-            Path::new("~/bin/tool"),
-            Path::new("/home/user/bin/tool")
-        ));
-    }
 
     #[test]
     fn repeated_slashes_after_tilde_keep_a_non_utf8_suffix_relative_to_home() {

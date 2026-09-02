@@ -855,7 +855,7 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn an_accessible_candidate_discovered_by_which_runs() {
+fn a_relative_path_entry_is_joined_literally_for_the_launch() {
     let temp = TempDir::new();
     let bin = temp.path().join("bin");
     fs::create_dir(&bin).unwrap();
@@ -889,7 +889,7 @@ int main(int argc, char **argv) {
         .unwrap();
 
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stdout, tool.as_os_str().as_encoded_bytes());
+    assert_eq!(output.stdout, b"./bin/provider-tool");
     assert!(output.stderr.is_empty());
 }
 

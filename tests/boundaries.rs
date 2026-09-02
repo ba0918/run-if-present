@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::process::Command;
 
-const APPROVED_RUNTIME_CRATES: [&str; 19] = [
+const APPROVED_RUNTIME_CRATES: [&str; 17] = [
     "anstream",
     "anstyle",
     "anstyle-parse",
@@ -14,14 +14,12 @@ const APPROVED_RUNTIME_CRATES: [&str; 19] = [
     "colorchoice",
     "heck",
     "is_terminal_polyfill",
-    "libc",
     "proc-macro2",
     "quote",
     "strsim",
     "syn",
     "unicode-ident",
     "utf8parse",
-    "which",
 ];
 
 fn runtime_source() -> String {
