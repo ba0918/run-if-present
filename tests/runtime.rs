@@ -1864,20 +1864,16 @@ fn a_descriptor_restore_failure_is_a_prepare_execution_error() {
 #[test]
 fn a_replacement_failure_keeps_its_exit_code_when_stderr_started_closed() {
     let temp = TempDir::new();
-    let interposer = descriptor_state_interposer(&temp);
     let program = temp.executable("invalid-format", b"not executable format");
     let mut command = binary();
-    command
-        .env("RUN_IF_PRESENT_REQUIRE_CLOSED_EXEC_FD", "2")
-        .arg("command")
-        .arg(program);
+    command.arg("command").arg(program);
     close_descriptor_before_exec(&mut command, 2);
-    preload(&mut command, &interposer);
 
     let output = command.output().unwrap();
     let report = output_report(&output);
 
     assert_eq!(output.status.code(), Some(126), "{report}");
+    assert_eq!(output.status.signal(), None, "{report}");
 }
 
 #[test]
