@@ -48,34 +48,25 @@ fn restore_inherited_sigpipe() -> io::Result<()> {
     Ok(())
 }
 
-pub enum RunError {
-    Diagnostic {
-        operation: &'static str,
-        operand: OsString,
-        source: io::Error,
-        code: i32,
-    },
+pub struct RunError {
+    operation: &'static str,
+    operand: OsString,
+    source: io::Error,
+    code: i32,
 }
 
 impl RunError {
     pub fn code(&self) -> i32 {
-        match self {
-            Self::Diagnostic { code, .. } => *code,
-        }
+        self.code
     }
 
     pub fn print(&self) {
-        match self {
-            Self::Diagnostic {
-                operation,
-                operand,
-                source,
-                ..
-            } => eprintln!(
-                "run-if-present: {operation}: {}: {source}",
-                escape_operand(operand)
-            ),
-        }
+        eprintln!(
+            "run-if-present: {}: {}: {}",
+            self.operation,
+            escape_operand(&self.operand),
+            self.source
+        );
     }
 }
 
@@ -396,7 +387,7 @@ fn diagnostic(
     source: io::Error,
     code: i32,
 ) -> RunError {
-    RunError::Diagnostic {
+    RunError {
         operation,
         operand: operand.into(),
         source,
