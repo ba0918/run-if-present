@@ -1,0 +1,117 @@
+use std::ffi::OsString;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "run-if-present",
+    version,
+    color = clap::ColorChoice::Never,
+    disable_help_subcommand = true,
+    disable_help_flag = true,
+    disable_version_flag = true
+)]
+pub struct Arguments {
+    #[arg(long, value_name = "DIR")]
+    pub chdir: Option<OsString>,
+
+    #[command(subcommand)]
+    pub condition: Condition,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Condition {
+    #[command(disable_help_flag = true)]
+    Command {
+        #[arg(allow_hyphen_values = true)]
+        command: OsString,
+
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        arguments: Vec<OsString>,
+    },
+    #[command(disable_help_flag = true)]
+    Path {
+        #[arg(allow_hyphen_values = true)]
+        path: OsString,
+
+        #[arg(last = true, num_args = 1.., allow_hyphen_values = true)]
+        command: Vec<OsString>,
+    },
+}
+
+impl Arguments {
+    pub fn empty_wrapper_value(&self) -> Option<&'static str> {
+        if self.chdir.as_ref().is_some_and(|path| path.is_empty()) {
+            return Some("chdir");
+        }
+        match &self.condition {
+            Condition::Command { command, .. } if command.is_empty() => Some("command"),
+            Condition::Path { path, .. } if path.is_empty() => Some("path"),
+            Condition::Path { command, .. }
+                if command.first().is_some_and(|value| value.is_empty()) =>
+            {
+                Some("command")
+            }
+            _ => None,
+        }
+    }
+
+    pub fn subcommand_help_requested(&self) -> Option<&'static str> {
+        match &self.condition {
+            Condition::Command { command, arguments }
+                if arguments.is_empty() && command == "--help" =>
+            {
+                Some("command")
+            }
+            Condition::Path { path, command } if command.is_empty() && path == "--help" => {
+                Some("path")
+            }
+            _ => None,
+        }
+    }
+
+    pub fn invalid_help_request(&self) -> bool {
+        matches!(
+            &self.condition,
+            Condition::Command { command, arguments }
+                if !arguments.is_empty() && command == "--help"
+        ) || matches!(
+            &self.condition,
+            Condition::Path { path, command } if !command.is_empty() && path == "--help"
+        )
+    }
+
+    pub fn missing_path_command(&self) -> bool {
+        matches!(&self.condition, Condition::Path { command, .. } if command.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_a_child_option_after_command() {
+        let parsed =
+            Arguments::try_parse_from(["run-if-present", "command", "printf", "--help"]).unwrap();
+
+        match parsed.condition {
+            Condition::Command { command, arguments } => {
+                assert_eq!(command, "printf");
+                assert_eq!(arguments, ["--help"]);
+            }
+            Condition::Path { .. } => panic!("parsed the wrong condition"),
+        }
+    }
+
+    #[test]
+    fn preserves_an_empty_child_argument() {
+        let parsed =
+            Arguments::try_parse_from(["run-if-present", "command", "printf", ""]).unwrap();
+
+        match parsed.condition {
+            Condition::Command { arguments, .. } => assert_eq!(arguments, [""]),
+            Condition::Path { .. } => panic!("parsed the wrong condition"),
+        }
+    }
+}

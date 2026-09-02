@@ -1,0 +1,19 @@
+[package]
+name = "run-if-present"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Run a command only when an optional command or path is present, without hiding execution failures."
+license = "MIT OR Apache-2.0"
+include = [
+    "/src/**",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+]
+
+[dependencies]
+clap = { version = "=4.6.6", features = ["derive"] }

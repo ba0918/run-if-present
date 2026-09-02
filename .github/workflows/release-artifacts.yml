@@ -1,0 +1,177 @@
+name: Release artifacts
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Immutable commit to package
+        required: true
+        type: string
+      version:
+        description: Cargo package version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      ref: ${{ steps.ref.outputs.ref }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: ref
+        name: Validate the immutable source ref
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]]
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+          persist-credentials: false
+      - id: version
+        name: Validate the requested package version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          version=$(.github/scripts/verify-package-version.sh "$VERSION" Cargo.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  crate:
+    needs: metadata
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+          persist-credentials: false
+      - name: Select the publication toolchain
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup override set 1.85.0
+      - name: Fix the source timestamp
+        env:
+          REF: ${{ needs.metadata.outputs.ref }}
+        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$REF")" >> "$GITHUB_ENV"
+      - name: Create and reproduce the crate package
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          cargo package --locked
+          cp "target/package/run-if-present-$VERSION.crate" /tmp/retained.crate
+          cargo package --locked
+          .github/scripts/verify-same-checksum.sh \
+            /tmp/retained.crate "target/package/run-if-present-$VERSION.crate"
+          mkdir crate-package
+          cp /tmp/retained.crate "crate-package/run-if-present-$VERSION.crate"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: crate-package
+          path: crate-package
+          if-no-files-found: error
+          retention-days: 30
+
+  archives:
+    needs: metadata
+    name: Archive ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            setup: sudo apt-get update && sudo apt-get install -y musl-tools
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            setup: sudo apt-get update && sudo apt-get install -y musl-tools
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            setup: ':'
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            setup: ':'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.metadata.outputs.ref }}
+          persist-credentials: false
+      - name: Select Rust 1.85.0
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal --target "${{ matrix.target }}"
+          rustup override set 1.85.0
+      - name: Install target linker
+        shell: bash
+        run: ${{ matrix.setup }}
+      - name: Build and smoke-test the executable
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo build --release --locked --target "$TARGET"
+          "target/$TARGET/release/run-if-present" --version \
+            | grep -Fx "run-if-present $VERSION"
+      - name: Create the uniform archive
+        env:
+          REF: ${{ needs.metadata.outputs.ref }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          export SOURCE_DATE_EPOCH
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$REF")
+          python3 .github/scripts/make-release-archive.py \
+            "target/$TARGET/release/run-if-present" \
+            "$VERSION" "$TARGET" release-archive
+          ARCHIVE="release-archive/run-if-present-v$VERSION-$TARGET.tar.gz"
+          ROOT="run-if-present-v$VERSION-$TARGET"
+          EXPECTED=$(printf '%s\n' \
+            "$ROOT/" \
+            "$ROOT/run-if-present" \
+            "$ROOT/README.md" \
+            "$ROOT/LICENSE-MIT" \
+            "$ROOT/LICENSE-APACHE")
+          [[ "$(tar -tzf "$ARCHIVE")" == "$EXPECTED" ]]
+          EXTRACTED=$(mktemp -d)
+          tar -xzf "$ARCHIVE" -C "$EXTRACTED"
+          "$EXTRACTED/run-if-present-v$VERSION-$TARGET/run-if-present" --version \
+            | grep -Fx "run-if-present $VERSION"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: archive-${{ matrix.target }}
+          path: release-archive
+          if-no-files-found: error
+          retention-days: 30
+
+  checksums:
+    needs: archives
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: archive-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create and verify SHA256SUMS
+        working-directory: release-assets
+        run: |
+          sha256sum run-if-present-v*.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 30

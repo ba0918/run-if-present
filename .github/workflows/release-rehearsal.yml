@@ -1,0 +1,55 @@
+name: Release rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Full immutable commit SHA to rehearse
+        required: true
+        type: string
+      version:
+        description: Cargo version at that commit
+        required: true
+        default: 0.1.0
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  immutable-ref:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Require a full commit SHA
+        env:
+          REHEARSAL_REF: ${{ inputs.ref }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$REHEARSAL_REF" =~ ^[0-9a-f]{40}$ ]]
+          .github/scripts/verify-package-version.sh "$VERSION" Cargo.toml
+
+  verify:
+    needs: immutable-ref
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ inputs.ref }}
+
+  artifacts:
+    needs:
+      - immutable-ref
+      - verify
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-artifacts.yml
+    with:
+      ref: ${{ inputs.ref }}
+      version: ${{ inputs.version }}

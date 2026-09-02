@@ -1,0 +1,178 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v[0-9]+.[0-9]+.[0-9]+
+
+permissions:
+  contents: read
+
+jobs:
+  prior-checks:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Require successful CI on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count=$(gh api -X GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f head_sha="$GITHUB_SHA" -f status=success -f per_page=100 \
+            --jq '.total_count')
+          [[ "$count" -gt 0 ]]
+
+  metadata:
+    needs: prior-checks
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: metadata
+        name: Verify tag, Cargo, and changelog agreement
+        run: |
+          version=$(.github/scripts/verify-release-metadata.sh \
+            "$GITHUB_REF_NAME" Cargo.toml CHANGELOG.md)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: prior-checks
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify.yml
+    with:
+      ref: ${{ github.sha }}
+
+  artifacts:
+    needs:
+      - metadata
+      - verify
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-artifacts.yml
+    with:
+      ref: ${{ github.sha }}
+      version: ${{ needs.metadata.outputs.version }}
+
+  draft-release:
+    needs:
+      - metadata
+      - artifacts
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Create or reconcile the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          .github/scripts/reconcile-github-release.sh \
+            "$GITHUB_REF_NAME" release-assets
+
+  publish-crate:
+    needs:
+      - metadata
+      - artifacts
+      - draft-release
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: crate-package
+          path: crate-package
+      - name: Select the publication toolchain
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup override set 1.85.0
+      - name: Verify regenerated crate matches retained package
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          export SOURCE_DATE_EPOCH
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
+          cargo package --locked
+          .github/scripts/verify-same-checksum.sh \
+            "crate-package/run-if-present-$VERSION.crate" \
+            "target/package/run-if-present-$VERSION.crate"
+      - name: Publish only a missing matching crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          crate="crate-package/run-if-present-$VERSION.crate"
+          local_checksum=$(sha256sum "$crate" | awk '{print $1}')
+          status=$(curl --silent --show-error --output /tmp/crate-version.json \
+            --write-out '%{http_code}' \
+            "https://crates.io/api/v1/crates/run-if-present/$VERSION")
+          if [[ "$status" == 200 ]]; then
+            registry_checksum=$(jq -r '.version.checksum' /tmp/crate-version.json)
+            [[ "$registry_checksum" == "$local_checksum" ]]
+          elif [[ "$status" == 404 ]]; then
+            export SOURCE_DATE_EPOCH
+            SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
+            cargo publish --locked
+            status=$(curl --silent --show-error --output /tmp/crate-version.json \
+              --write-out '%{http_code}' \
+              "https://crates.io/api/v1/crates/run-if-present/$VERSION")
+            [[ "$status" == 200 ]]
+            registry_checksum=$(jq -r '.version.checksum' /tmp/crate-version.json)
+            [[ "$registry_checksum" == "$local_checksum" ]]
+          else
+            echo "crates.io version lookup returned HTTP $status" >&2
+            exit 1
+          fi
+
+  publish-release:
+    needs:
+      - metadata
+      - artifacts
+      - draft-release
+      - publish-crate
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Reconcile and publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          .github/scripts/reconcile-github-release.sh \
+            "$GITHUB_REF_NAME" release-assets --publish

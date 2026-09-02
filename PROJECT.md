@@ -9,22 +9,31 @@ be confirmed.
 
 The approved specification, [`docs/spec/run-if-present.md`](docs/spec/run-if-present.md), is the
 canonical source for detailed product, implementation, verification, and release requirements.
+[`CONTEXT.md`](CONTEXT.md) is the glossary: the project's reading of terms such as "optional
+condition" and "confirmed absence", and the words not to use for them.
 
 ## Implementation and verification
 
-The implementation language is Rust. There is no `Cargo.toml` or implementation yet, so no project
-build, test, or lint command is currently runnable.
+The project is implemented in Rust 2021 with a minimum supported Rust version of 1.85. The Cargo
+package manifest and locked dependency graph are present in `Cargo.toml` and `Cargo.lock`; the
+implementation is in `src/`, with behavior and boundary coverage in `tests/`.
 
-Once the Cargo project exists, every merge and release candidate must pass:
+Run the locally reproducible checks with the repository's locked dependencies:
 
 ```text
+cargo build --locked
+cargo test --all-targets --all-features --locked
 cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo package
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo package --locked
 ```
 
-Do not treat these checks as completed until they have actually succeeded. The remaining
-verification contract is in Section 13 of the specification.
+The hosted checks are separate evidence. `.github/workflows/verify.yml` runs behavior tests on
+Linux and macOS with Rust 1.85.0 and stable, plus the format, lint, and package checks on Rust
+1.85.0. `.github/workflows/release-artifacts.yml` builds the packaged binaries and smoke-tests each
+binary's `--version` output. Do not claim those hosted platform or release-artifact checks are
+complete until the corresponding workflow succeeds. The remaining verification contract is in
+Section 13 of the specification.
 
 ## Project constraints
 
