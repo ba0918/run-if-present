@@ -367,6 +367,64 @@ int {execv_name}(const char *path, char *const argv[]) {{
     library
 }
 
+fn sigpipe_capture_failure_interposer(temp: &TempDir) -> PathBuf {
+    let source = temp.path().join("sigpipe-capture-failure.c");
+    let library = if cfg!(target_os = "macos") {
+        temp.path().join("libsigpipe-capture-failure.dylib")
+    } else {
+        temp.path().join("libsigpipe-capture-failure.so")
+    };
+    let signal_name = if cfg!(target_os = "macos") {
+        "interposed_signal"
+    } else {
+        "signal"
+    };
+    let interpose = if cfg!(target_os = "macos") {
+        r#"
+#define INTERPOSE(replacement, replacee) \
+    __attribute__((used)) static struct { const void *replacement_ptr; const void *replacee_ptr; } \
+    interpose_##replacee __attribute__((section("__DATA,__interpose"))) = \
+    { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee };
+INTERPOSE(interposed_signal, signal)
+"#
+    } else {
+        ""
+    };
+    let body = format!(
+        r#"#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <signal.h>
+typedef void (*signal_handler)(int);
+typedef signal_handler (*signal_function)(int, signal_handler);
+static int failed_capture = 0;
+signal_handler {signal_name}(int number, signal_handler handler) {{
+    if (number == SIGPIPE && !failed_capture) {{
+        failed_capture = 1;
+        return SIG_ERR;
+    }}
+    signal_function real_signal = (signal_function)dlsym(RTLD_NEXT, "signal");
+    return real_signal(number, handler);
+}}
+{interpose}
+"#,
+    );
+    fs::write(&source, body).unwrap();
+    let mut compiler = Command::new("cc");
+    if cfg!(target_os = "macos") {
+        compiler.args(["-dynamiclib"]);
+    } else {
+        compiler.args(["-shared", "-fPIC"]);
+    }
+    let status = compiler
+        .arg(&source)
+        .arg("-o")
+        .arg(&library)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    library
+}
+
 fn preload(command: &mut Command, library: &Path) {
     if cfg!(target_os = "macos") {
         command.env("DYLD_INSERT_LIBRARIES", library);
@@ -1601,6 +1659,24 @@ fn a_descriptor_capture_failure_is_a_prepare_execution_error() {
     let diagnostic = String::from_utf8(output.stderr).unwrap();
     assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/bin/true\":"));
     assert!(diagnostic.contains(&io::Error::from_raw_os_error(5).to_string()));
+}
+
+#[test]
+fn a_sigpipe_capture_failure_is_a_prepare_execution_error() {
+    let temp = TempDir::new();
+    let interposer = sigpipe_capture_failure_interposer(&temp);
+    let mut command = binary();
+    command.args(["command", "/bin/true"]);
+    preload(&mut command, &interposer);
+
+    let output = command.output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"run-if-present: prepare execution: \"/bin/true\": could not capture the inherited SIGPIPE disposition\n"
+    );
 }
 
 #[test]
