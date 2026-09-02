@@ -66,6 +66,16 @@ fn assert_permission_diagnostic(output: &Output, operation: &str) {
     assert!(diagnostic.contains(&io::Error::from_raw_os_error(13).to_string()));
 }
 
+fn output_report(output: &Output) -> String {
+    format!(
+        "exit code {:?}, signal {:?}, stdout {:?}, stderr {:?}",
+        output.status.code(),
+        output.status.signal(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    )
+}
+
 fn compile_c_program(temp: &TempDir, output: &Path, source: &[u8]) {
     let source_path = temp.path().join("fixture.c");
     fs::write(&source_path, source).unwrap();
@@ -124,6 +134,21 @@ fn close_descriptor_before_exec(command: &mut Command, descriptor: i32) {
         });
     }
 }
+
+// The loader variable that injects a fixture library into the wrapper would otherwise pass
+// through the wrapper's unchanged environment into the child it execs; on macOS dyld aborts a
+// system binary whose inserted dylib it cannot load. Each fixture removes the variable once it
+// is loaded, so the wrapper's pass-through of that one variable is not observed by any test.
+const UNSET_INJECTION_VARIABLE: &str = r#"
+__attribute__((constructor))
+static void unset_injection_variable(void) {
+#ifdef __APPLE__
+    unsetenv("DYLD_INSERT_LIBRARIES");
+#else
+    unsetenv("LD_PRELOAD");
+#endif
+}
+"#;
 
 // The loader variable that injects a fixture library into the wrapper would otherwise pass
 // through the wrapper's unchanged environment into the child it execs; on macOS dyld aborts a
@@ -313,6 +338,33 @@ INTERPOSE(interposed_execv, execv)
 #define real_execv ((execv_function)dlsym(RTLD_NEXT, "execv"))
 "#
     };
+    // Names what an unexpectedly open descriptor refers to. Linux reads the /proc link rather
+    // than calling fcntl, which inside this library would resolve to the replacement above.
+    let describe_descriptor = if cfg!(target_os = "macos") {
+        r#"
+static void describe_descriptor(int descriptor, char *path, size_t size) {
+    char resolved[1024];
+    if (fcntl(descriptor, F_GETPATH, resolved) == -1) {
+        snprintf(path, size, "path unavailable, errno %d", errno);
+    } else {
+        snprintf(path, size, "%s", resolved);
+    }
+}
+"#
+    } else {
+        r#"
+static void describe_descriptor(int descriptor, char *path, size_t size) {
+    char link[64];
+    snprintf(link, sizeof(link), "/proc/self/fd/%d", descriptor);
+    ssize_t length = readlink(link, path, size - 1);
+    if (length == -1) {
+        snprintf(path, size, "path unavailable, errno %d", errno);
+    } else {
+        path[length] = '\0';
+    }
+}
+"#
+    };
     let body = format!(
         r#"#define _GNU_SOURCE
 #include <dlfcn.h>
@@ -357,13 +409,23 @@ int {close_name}(int descriptor) {{
     }}
     return real_close(descriptor);
 }}
+// A descriptor that should have been closed is reported on stdout, because stderr is the
+// descriptor under test, and fails with ENOENT: the wrapper maps it to exit 127, which neither
+// the expected replacement failure (126) nor its own prepare-execution failure (1) produces.
 int {execv_name}(const char *path, char *const argv[]) {{
     const char *value = getenv("RUN_IF_PRESENT_REQUIRE_CLOSED_EXEC_FD");
     if (value != NULL) {{
         int descriptor = atoi(value);
         errno = 0;
         if (real_fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) {{
-            errno = EIO;
+            char target[1100];
+            char line[1200];
+            describe_descriptor(descriptor, target, sizeof(target));
+            int length = snprintf(line, sizeof(line),
+                "descriptor-state fixture: descriptor %d is open at exec: %s\n",
+                descriptor, target);
+            if (length > 0) write(STDOUT_FILENO, line, (size_t)length);
+            errno = ENOENT;
             return -1;
         }}
     }}
@@ -1785,21 +1847,30 @@ fn a_descriptor_restore_failure_is_a_prepare_execution_error() {
     let mut command = binary();
     command
         .env("RUN_IF_PRESENT_FAIL_CLOSE_FD", "0")
+        .env("RUN_IF_PRESENT_REQUIRE_CLOSED_EXEC_FD", "0")
         .args(["command", "/usr/bin/true"]);
     close_descriptor_before_exec(&mut command, 0);
     preload(&mut command, &interposer);
 
     let output = command.output().unwrap();
+    let report = output_report(&output);
 
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert!(output.stdout.is_empty(), "{report}");
     assert_eq!(
         output.stderr.iter().filter(|byte| **byte == b'\n').count(),
-        1
+        1,
+        "{report}"
     );
     let diagnostic = String::from_utf8(output.stderr).unwrap();
-    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/usr/bin/true\":"));
-    assert!(diagnostic.contains(&io::Error::from_raw_os_error(5).to_string()));
+    assert!(
+        diagnostic.starts_with("run-if-present: prepare execution: \"/usr/bin/true\":"),
+        "{report}"
+    );
+    assert!(
+        diagnostic.contains(&io::Error::from_raw_os_error(5).to_string()),
+        "{report}"
+    );
 }
 
 #[test]
@@ -1815,9 +1886,10 @@ fn a_replacement_failure_keeps_its_exit_code_when_stderr_started_closed() {
     close_descriptor_before_exec(&mut command, 2);
     preload(&mut command, &interposer);
 
-    let status = command.status().unwrap();
+    let output = command.output().unwrap();
+    let report = output_report(&output);
 
-    assert_eq!(status.code(), Some(126));
+    assert_eq!(output.status.code(), Some(126), "{report}");
 }
 
 #[test]
@@ -1894,13 +1966,8 @@ fn a_close_on_exec_descriptor_is_closed_before_the_child() {
     }
 
     let output = command.output().unwrap();
-    let report = format!(
-        "exit code {:?}, signal {:?}, stdout {:?}, stderr {:?}",
-        output.status.code(),
-        output.status.signal(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+    let report = output_report(&output);
+
     assert_eq!(output.status.code(), Some(0), "{report}");
     assert!(output.stdout.is_empty(), "{report}");
     assert!(output.stderr.is_empty(), "{report}");
