@@ -129,7 +129,7 @@ jobs:
         run: |
           export SOURCE_DATE_EPOCH
           SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$REF")
-          .github/scripts/make-release-archive.sh \
+          python3 .github/scripts/make-release-archive.py \
             "target/$TARGET/release/run-if-present" \
             "$VERSION" "$TARGET" release-archive
           ARCHIVE="release-archive/run-if-present-v$VERSION-$TARGET.tar.gz"

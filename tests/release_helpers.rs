@@ -691,13 +691,13 @@ fn an_unexpected_remote_asset_stops_without_mutation() {
 }
 
 #[test]
-fn release_archive_has_the_uniform_layout() {
+fn release_archive_has_the_uniform_layout_and_a_fixed_timestamp() {
     let root = fixture();
     let first = root.join("first");
     let second = root.join("second");
     for output_dir in [&first, &second] {
-        let status = Command::new("bash")
-            .arg(".github/scripts/make-release-archive.sh")
+        let status = Command::new("python3")
+            .arg(".github/scripts/make-release-archive.py")
             .arg(env!("CARGO_BIN_EXE_run-if-present"))
             .args(["0.1.0", "x86_64-unknown-linux-musl"])
             .arg(output_dir)
@@ -705,12 +705,14 @@ fn release_archive_has_the_uniform_layout() {
             .status()
             .unwrap();
         assert!(status.success());
-        std::thread::sleep(std::time::Duration::from_secs(2));
     }
 
     let archive = first.join("run-if-present-v0.1.0-x86_64-unknown-linux-musl.tar.gz");
     let regenerated = second.join("run-if-present-v0.1.0-x86_64-unknown-linux-musl.tar.gz");
-    assert_eq!(fs::read(&archive).unwrap(), fs::read(regenerated).unwrap());
+    let bytes = fs::read(&archive).unwrap();
+    assert_eq!(bytes, fs::read(regenerated).unwrap());
+    // The gzip header stores the modification time in bytes 4..8, little-endian.
+    assert_eq!(bytes[4..8], 1_700_000_000_u32.to_le_bytes());
     let listing = Command::new("tar")
         .args(["-tzf"])
         .arg(&archive)
@@ -767,7 +769,7 @@ fn release_workflow_extracts_and_smoke_tests_each_native_archive_before_upload()
     }
 
     let creation = archives
-        .find(".github/scripts/make-release-archive.sh")
+        .find(".github/scripts/make-release-archive.py")
         .unwrap();
     let archive_path = archives
         .find("ARCHIVE=\"release-archive/run-if-present-v$VERSION-$TARGET.tar.gz\"")
