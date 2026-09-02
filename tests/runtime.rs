@@ -150,21 +150,6 @@ static void unset_injection_variable(void) {
 }
 "#;
 
-// The loader variable that injects a fixture library into the wrapper would otherwise pass
-// through the wrapper's unchanged environment into the child it execs; on macOS dyld aborts a
-// system binary whose inserted dylib it cannot load. Each fixture removes the variable once it
-// is loaded, so the wrapper's pass-through of that one variable is not observed by any test.
-const UNSET_INJECTION_VARIABLE: &str = r#"
-__attribute__((constructor))
-static void unset_injection_variable(void) {
-#ifdef __APPLE__
-    unsetenv("DYLD_INSERT_LIBRARIES");
-#else
-    unsetenv("LD_PRELOAD");
-#endif
-}
-"#;
-
 fn process_boundary_interposer(temp: &TempDir) -> PathBuf {
     let source = temp.path().join("process-boundary.c");
     let library = if cfg!(target_os = "macos") {
@@ -371,9 +356,12 @@ static void describe_descriptor(int descriptor, char *path, size_t size) {
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 {UNSET_INJECTION_VARIABLE}
+{describe_descriptor}
 static int close_armed = -1;
 static int requested_descriptor(const char *name, int descriptor) {{
     const char *value = getenv(name);
