@@ -7,10 +7,10 @@ use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+mod common;
+
+use common::TempDir;
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_run-if-present"))
@@ -57,41 +57,6 @@ fn assert_permission_diagnostic(output: &Output, operation: &str) {
     assert_eq!(diagnostic.lines().count(), 1);
     assert!(diagnostic.starts_with(&format!("run-if-present: {operation}:")));
     assert!(diagnostic.contains(&io::Error::from_raw_os_error(13).to_string()));
-}
-
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new() -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "run-if-present-{}-{nonce}-{}",
-            std::process::id(),
-            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&path).unwrap();
-        Self(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-
-    fn executable(&self, name: &str, body: &[u8]) -> PathBuf {
-        let path = self.0.join(name);
-        fs::write(&path, body).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
 }
 
 fn compile_c_program(temp: &TempDir, output: &Path, source: &[u8]) {
