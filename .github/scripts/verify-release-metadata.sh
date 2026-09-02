@@ -18,7 +18,7 @@ fi
 
 heading="## [$version] - "
 if awk '
-  /^##([[:space:]]|$)/ && /Unreleased/ && $0 != "## Unreleased" { malformed = 1 }
+  /^#+([[:space:]]|$)/ && tolower($0) ~ /unreleased/ && $0 != "## Unreleased" { malformed = 1 }
   END { exit !malformed }
 ' "$changelog"; then
   echo "release metadata: Unreleased heading must be exactly '## Unreleased'" >&2

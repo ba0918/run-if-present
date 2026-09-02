@@ -378,6 +378,42 @@ fn release_metadata_rejects_a_noncanonical_unreleased_heading() {
 }
 
 #[test]
+fn release_metadata_rejects_a_level_three_unreleased_heading() {
+    let root = fixture();
+    fs::write(
+        root.path().join("CHANGELOG.md"),
+        "# Changelog\n\n### Unreleased\n\n- Still unreleased.\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/releases/tag/v0.1.0\n",
+    )
+    .unwrap();
+
+    let output = metadata(root.path(), "v0.1.0");
+
+    assert!(!output.status.success());
+    assert_eq!(
+        output.stderr,
+        b"release metadata: Unreleased heading must be exactly '## Unreleased'\n"
+    );
+}
+
+#[test]
+fn release_metadata_rejects_a_lowercase_unreleased_heading() {
+    let root = fixture();
+    fs::write(
+        root.path().join("CHANGELOG.md"),
+        "# Changelog\n\n## unreleased\n\n- Still unreleased.\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/releases/tag/v0.1.0\n",
+    )
+    .unwrap();
+
+    let output = metadata(root.path(), "v0.1.0");
+
+    assert!(!output.status.success());
+    assert_eq!(
+        output.stderr,
+        b"release metadata: Unreleased heading must be exactly '## Unreleased'\n"
+    );
+}
+
+#[test]
 fn release_metadata_does_not_count_items_from_another_version() {
     let root = fixture();
     fs::write(
