@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.1.0] - 2026-09-03
+
 ### Added
 
 - Added `command` and `path` conditions that treat only confirmed absence as silent success while
@@ -16,3 +18,5 @@
   one-line escaped diagnostics.
 - Added support for Linux and macOS on x86_64 and aarch64, distributed under
   `MIT OR Apache-2.0`.
+
+[0.1.0]: https://github.com/ba0918/run-if-present/releases/tag/v0.1.0
