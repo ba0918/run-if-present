@@ -39,16 +39,8 @@ fn main() {
         println!();
         return;
     }
-    if arguments.invalid_empty_chdir() {
-        eprintln!("run-if-present: syntax: chdir must not be empty");
-        std::process::exit(2);
-    }
-    if arguments.invalid_empty_launch_command() {
-        eprintln!("run-if-present: syntax: command must not be empty");
-        std::process::exit(2);
-    }
-    if arguments.invalid_empty_path() {
-        eprintln!("run-if-present: syntax: path must not be empty");
+    if let Some(name) = arguments.empty_wrapper_value() {
+        eprintln!("run-if-present: syntax: {name} must not be empty");
         std::process::exit(2);
     }
     if let Err(error) = runtime::run(arguments) {

@@ -40,21 +40,20 @@ pub enum Condition {
 }
 
 impl Arguments {
-    pub fn invalid_empty_launch_command(&self) -> bool {
-        match &self.condition {
-            Condition::Command { command, .. } => command.is_empty(),
-            Condition::Path { command, .. } => {
-                command.first().is_some_and(|value| value.is_empty())
-            }
+    pub fn empty_wrapper_value(&self) -> Option<&'static str> {
+        if self.chdir.as_ref().is_some_and(|path| path.is_empty()) {
+            return Some("chdir");
         }
-    }
-
-    pub fn invalid_empty_path(&self) -> bool {
-        matches!(&self.condition, Condition::Path { path, .. } if path.is_empty())
-    }
-
-    pub fn invalid_empty_chdir(&self) -> bool {
-        self.chdir.as_ref().is_some_and(|path| path.is_empty())
+        match &self.condition {
+            Condition::Command { command, .. } if command.is_empty() => Some("command"),
+            Condition::Path { path, .. } if path.is_empty() => Some("path"),
+            Condition::Path { command, .. }
+                if command.first().is_some_and(|value| value.is_empty()) =>
+            {
+                Some("command")
+            }
+            _ => None,
+        }
     }
 
     pub fn command_help_requested(&self) -> bool {
