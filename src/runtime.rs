@@ -75,9 +75,13 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
     if let Some(directory) = arguments.chdir {
         let directory = expand_tilde(&directory)
             .map_err(|source| diagnostic("expand", directory, source, 1))?;
+        match fs::metadata(&directory) {
+            Ok(_) => {}
+            Err(error) if is_confirmed_absence(&error) => return Ok(()),
+            Err(error) => return Err(diagnostic("chdir", directory, error, 1)),
+        }
         match env::set_current_dir(&directory) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(diagnostic("chdir", directory, error, 1)),
         }
     }
@@ -88,7 +92,7 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
                 expand_tilde(&path).map_err(|source| diagnostic("expand", path, source, 1))?;
             match fs::metadata(&guard) {
                 Ok(_) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) if is_confirmed_absence(&error) => return Ok(()),
                 Err(error) => return Err(diagnostic("inspect", guard, error, 1)),
             }
             let requested = command.remove(0);
@@ -206,9 +210,16 @@ fn classify(candidate: PathBuf) -> Candidate {
     match fs::metadata(&candidate) {
         Ok(metadata) if is_invokable(&metadata) => Candidate::Invokable(candidate),
         Ok(_) => Candidate::Unusable(candidate),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Candidate::Absent,
+        Err(error) if is_confirmed_absence(&error) => Candidate::Absent,
         Err(error) => Candidate::InspectionFailed(candidate, error),
     }
+}
+
+fn is_confirmed_absence(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+    )
 }
 
 fn select(candidate: Candidate) -> Result<Option<PathBuf>, RunError> {

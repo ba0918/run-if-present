@@ -194,6 +194,44 @@ fn an_absent_path_is_silent_success() {
 }
 
 #[test]
+fn a_path_guard_through_a_regular_file_is_confirmed_absent() {
+    let temp = TempDir::new();
+    let file = temp.path().join("file");
+    fs::write(&file, b"").unwrap();
+
+    let output = binary()
+        .arg("path")
+        .arg(file.join("guard"))
+        .args(["--", "/bin/false"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_path_guard_with_a_trailing_slash_on_a_regular_file_is_confirmed_absent() {
+    let temp = TempDir::new();
+    let file = temp.path().join("file");
+    fs::write(&file, b"").unwrap();
+    let mut guard = file.into_os_string();
+    guard.push("/");
+
+    let output = binary()
+        .arg("path")
+        .arg(guard)
+        .args(["--", "/bin/false"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn a_dangling_link_is_silent_success() {
     let temp = TempDir::new();
     let guard = temp.path().join("guard");
@@ -330,22 +368,37 @@ fn an_unusable_command_exits_126() {
 }
 
 #[test]
-fn an_uninspectable_search_location_exits_1() {
+fn a_path_entry_through_a_regular_file_contributes_no_candidate() {
     let temp = TempDir::new();
-    let not_a_directory = temp.path().join("not-a-directory");
-    fs::write(&not_a_directory, b"").unwrap();
+    let file = temp.path().join("file");
+    fs::write(&file, b"").unwrap();
 
     let output = binary()
-        .env("PATH", not_a_directory)
+        .env("PATH", file.join("directory"))
         .args(["command", "tool"])
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: inspect executable:")
-    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn an_explicit_command_through_a_regular_file_is_confirmed_absent() {
+    let temp = TempDir::new();
+    let file = temp.path().join("file");
+    fs::write(&file, b"").unwrap();
+
+    let output = binary()
+        .arg("command")
+        .arg(file.join("tool"))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
@@ -413,7 +466,7 @@ fn search_continues_past_an_unusable_candidate() {
 }
 
 #[test]
-fn search_finds_a_usable_candidate_after_an_inspection_failure() {
+fn search_continues_past_a_path_entry_that_is_a_regular_file() {
     let first = TempDir::new();
     let second = TempDir::new();
     let not_a_directory = first.path().join("not-a-directory");
@@ -466,7 +519,45 @@ fn a_missing_chdir_is_silent_success() {
 }
 
 #[test]
-fn a_non_directory_chdir_is_visible() {
+fn a_chdir_target_through_a_regular_file_is_confirmed_absent() {
+    let temp = TempDir::new();
+    let file = temp.path().join("file");
+    fs::write(&file, b"").unwrap();
+
+    let output = binary()
+        .arg("--chdir")
+        .arg(file.join("directory"))
+        .args(["command", "/bin/false"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_chdir_target_with_a_trailing_slash_on_a_regular_file_is_confirmed_absent() {
+    let temp = TempDir::new();
+    let file = temp.path().join("file");
+    fs::write(&file, b"").unwrap();
+    let mut directory = file.into_os_string();
+    directory.push("/");
+
+    let output = binary()
+        .arg("--chdir")
+        .arg(directory)
+        .args(["command", "/bin/false"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn an_existing_regular_file_chdir_is_visible() {
     let temp = TempDir::new();
     let path = temp.path().join("file");
     fs::write(&path, b"").unwrap();
