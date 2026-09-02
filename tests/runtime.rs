@@ -436,7 +436,7 @@ fn preload(command: &mut Command, library: &Path) {
 #[test]
 fn a_present_path_runs_the_command_and_preserves_its_output() {
     let output = binary()
-        .args(["path", "/bin", "--", "/bin/printf", "present"])
+        .args(["path", "/bin", "--", "/usr/bin/printf", "present"])
         .output()
         .unwrap();
 
@@ -1074,7 +1074,7 @@ fn stdin_is_preserved() {
 fn non_utf8_child_arguments_are_preserved() {
     let argument = OsString::from_vec(vec![b'a', 0xff, b'z']);
     let output = binary()
-        .args(["path", "/bin", "--", "/bin/printf", "%s"])
+        .args(["path", "/bin", "--", "/usr/bin/printf", "%s"])
         .arg(&argument)
         .output()
         .unwrap();
@@ -1089,7 +1089,7 @@ fn tilde_guards_use_non_empty_home() {
 
     let output = binary()
         .env("HOME", temp.path())
-        .args(["path", "~/guard", "--", "/bin/printf", "expanded"])
+        .args(["path", "~/guard", "--", "/usr/bin/printf", "expanded"])
         .output()
         .unwrap();
 
@@ -1645,7 +1645,7 @@ fn a_descriptor_capture_failure_is_a_prepare_execution_error() {
     let mut command = binary();
     command
         .env("RUN_IF_PRESENT_FAIL_FCNTL_FD", "0")
-        .args(["command", "/bin/true"]);
+        .args(["command", "/usr/bin/true"]);
     preload(&mut command, &interposer);
 
     let output = command.output().unwrap();
@@ -1657,7 +1657,7 @@ fn a_descriptor_capture_failure_is_a_prepare_execution_error() {
         1
     );
     let diagnostic = String::from_utf8(output.stderr).unwrap();
-    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/bin/true\":"));
+    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/usr/bin/true\":"));
     assert!(diagnostic.contains(&io::Error::from_raw_os_error(5).to_string()));
 }
 
@@ -1666,7 +1666,7 @@ fn a_sigpipe_capture_failure_is_a_prepare_execution_error() {
     let temp = TempDir::new();
     let interposer = sigpipe_capture_failure_interposer(&temp);
     let mut command = binary();
-    command.args(["command", "/bin/true"]);
+    command.args(["command", "/usr/bin/true"]);
     preload(&mut command, &interposer);
 
     let output = command.output().unwrap();
@@ -1675,7 +1675,7 @@ fn a_sigpipe_capture_failure_is_a_prepare_execution_error() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         output.stderr,
-        b"run-if-present: prepare execution: \"/bin/true\": could not capture the inherited SIGPIPE disposition\n"
+        b"run-if-present: prepare execution: \"/usr/bin/true\": could not capture the inherited SIGPIPE disposition\n"
     );
 }
 
@@ -1686,7 +1686,7 @@ fn a_descriptor_capture_failure_with_zero_errno_uses_operating_system_error_text
     let mut command = binary();
     command
         .env("RUN_IF_PRESENT_FAIL_FCNTL_WITH_ZERO_ERRNO_FD", "0")
-        .args(["command", "/bin/true"]);
+        .args(["command", "/usr/bin/true"]);
     preload(&mut command, &interposer);
 
     let output = command.output().unwrap();
@@ -1694,7 +1694,7 @@ fn a_descriptor_capture_failure_with_zero_errno_uses_operating_system_error_text
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     let diagnostic = String::from_utf8(output.stderr).unwrap();
-    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/bin/true\":"));
+    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/usr/bin/true\":"));
     assert!(diagnostic.contains(&io::Error::from_raw_os_error(0).to_string()));
 }
 
@@ -1705,7 +1705,7 @@ fn a_descriptor_restore_failure_is_a_prepare_execution_error() {
     let mut command = binary();
     command
         .env("RUN_IF_PRESENT_FAIL_CLOSE_FD", "0")
-        .args(["command", "/bin/true"]);
+        .args(["command", "/usr/bin/true"]);
     close_descriptor_before_exec(&mut command, 0);
     preload(&mut command, &interposer);
 
@@ -1718,7 +1718,7 @@ fn a_descriptor_restore_failure_is_a_prepare_execution_error() {
         1
     );
     let diagnostic = String::from_utf8(output.stderr).unwrap();
-    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/bin/true\":"));
+    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/usr/bin/true\":"));
     assert!(diagnostic.contains(&io::Error::from_raw_os_error(5).to_string()));
 }
 
@@ -1840,7 +1840,7 @@ fn a_non_utf8_missing_launch_target_is_escaped_with_the_fixed_reason() {
 #[test]
 fn an_empty_child_argument_reaches_the_child() {
     let output = binary()
-        .args(["path", "/bin", "--", "/bin/printf", "[%s]", ""])
+        .args(["path", "/bin", "--", "/usr/bin/printf", "[%s]", ""])
         .output()
         .unwrap();
 
@@ -1857,7 +1857,7 @@ fn non_utf8_home_is_used_without_lossy_conversion() {
 
     let output = binary()
         .env("HOME", &home)
-        .args(["path", "~/guard", "--", "/bin/printf", "bytes"])
+        .args(["path", "~/guard", "--", "/usr/bin/printf", "bytes"])
         .output()
         .unwrap();
 
@@ -1869,7 +1869,7 @@ fn non_utf8_home_is_used_without_lossy_conversion() {
 fn an_unset_home_uses_the_operating_system_user_database() {
     let output = binary()
         .env_remove("HOME")
-        .args(["path", "~", "--", "/bin/printf", "database-home"])
+        .args(["path", "~", "--", "/usr/bin/printf", "database-home"])
         .output()
         .unwrap();
 
@@ -1882,7 +1882,7 @@ fn an_unset_home_uses_the_operating_system_user_database() {
 fn an_empty_home_uses_the_operating_system_user_database() {
     let output = binary()
         .env("HOME", "")
-        .args(["path", "~", "--", "/bin/printf", "database-home"])
+        .args(["path", "~", "--", "/usr/bin/printf", "database-home"])
         .output()
         .unwrap();
 
