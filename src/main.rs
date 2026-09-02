@@ -4,6 +4,13 @@ mod runtime;
 use clap::{error::ErrorKind, Arg, ArgAction, CommandFactory, FromArgMatches};
 use std::io::Write;
 
+fn print_syntax(message: impl std::fmt::Display) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "run-if-present: syntax: {message}"
+    );
+}
+
 fn main() {
     let parser = cli::Arguments::command()
         .arg(Arg::new("help").long("help").action(ArgAction::Help))
@@ -23,7 +30,7 @@ fn main() {
             error.exit()
         }
         Err(_) => {
-            eprintln!("run-if-present: syntax: invalid command line");
+            print_syntax("invalid command line");
             std::process::exit(2);
         }
     };
@@ -37,11 +44,11 @@ fn main() {
         return;
     }
     if arguments.invalid_help_request() || arguments.missing_path_command() {
-        eprintln!("run-if-present: syntax: invalid command line");
+        print_syntax("invalid command line");
         std::process::exit(2);
     }
     if let Some(name) = arguments.empty_wrapper_value() {
-        eprintln!("run-if-present: syntax: {name} must not be empty");
+        print_syntax(format_args!("{name} must not be empty"));
         std::process::exit(2);
     }
     if let Err(error) = runtime::run(arguments) {

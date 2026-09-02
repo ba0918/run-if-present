@@ -18,6 +18,16 @@ fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_run-if-present"))
 }
 
+fn status_with_closed_stderr(mut command: Command) -> std::process::ExitStatus {
+    let (reader, writer) = UnixStream::pair().unwrap();
+    drop(reader);
+
+    command
+        .stderr(Stdio::from(OwnedFd::from(writer)))
+        .status()
+        .unwrap()
+}
+
 fn command_with_sigpipe_ignored(program: &str, arguments: &[&str]) -> Command {
     let mut command = Command::new("/bin/sh");
     command.args([
@@ -1531,17 +1541,32 @@ fn a_replacement_failure_keeps_its_exit_code_when_stderr_is_a_closed_pipe() {
     let temp = TempDir::new();
     let program = temp.path().join("not-executable");
     fs::write(&program, b"not executable").unwrap();
-    let (reader, writer) = UnixStream::pair().unwrap();
-    drop(reader);
+    let mut command = binary();
+    command.arg("command").arg(program);
 
-    let status = binary()
-        .arg("command")
-        .arg(program)
-        .stderr(Stdio::from(OwnedFd::from(writer)))
-        .status()
-        .unwrap();
+    let status = status_with_closed_stderr(command);
 
     assert_eq!(status.code(), Some(126));
+}
+
+#[test]
+fn an_empty_wrapper_value_keeps_exit_two_when_stderr_is_a_closed_pipe() {
+    let mut command = binary();
+    command.args(["command", ""]);
+
+    let status = status_with_closed_stderr(command);
+
+    assert_eq!(status.code(), Some(2));
+}
+
+#[test]
+fn an_unknown_top_level_argument_keeps_exit_two_when_stderr_is_a_closed_pipe() {
+    let mut command = binary();
+    command.arg("unknown");
+
+    let status = status_with_closed_stderr(command);
+
+    assert_eq!(status.code(), Some(2));
 }
 
 #[test]
