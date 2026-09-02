@@ -298,15 +298,14 @@ fn descriptor_state_interposer(temp: &TempDir) -> PathBuf {
     { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee };
 INTERPOSE(interposed_fcntl, fcntl)
 INTERPOSE(interposed_close, close)
-INTERPOSE(interposed_execv, execv)
 "#
     } else {
         ""
     };
     let names = if cfg!(target_os = "macos") {
-        ("interposed_fcntl", "interposed_close", "interposed_execv")
+        ("interposed_fcntl", "interposed_close")
     } else {
-        ("fcntl", "close", "execv")
+        ("fcntl", "close")
     };
     // dyld applies the interposition to dlsym(RTLD_NEXT) results too, so on macOS the
     // originals are reached by name: calls from the interposing image are not rewritten.
@@ -314,40 +313,11 @@ INTERPOSE(interposed_execv, execv)
         r#"
 #define real_fcntl fcntl
 #define real_close close
-#define real_execv execv
 "#
     } else {
         r#"
 #define real_fcntl ((fcntl_function)dlsym(RTLD_NEXT, "fcntl"))
 #define real_close ((close_function)dlsym(RTLD_NEXT, "close"))
-#define real_execv ((execv_function)dlsym(RTLD_NEXT, "execv"))
-"#
-    };
-    // Names what an unexpectedly open descriptor refers to. Linux reads the /proc link rather
-    // than calling fcntl, which inside this library would resolve to the replacement above.
-    let describe_descriptor = if cfg!(target_os = "macos") {
-        r#"
-static void describe_descriptor(int descriptor, char *path, size_t size) {
-    char resolved[1024];
-    if (fcntl(descriptor, F_GETPATH, resolved) == -1) {
-        snprintf(path, size, "path unavailable, errno %d", errno);
-    } else {
-        snprintf(path, size, "%s", resolved);
-    }
-}
-"#
-    } else {
-        r#"
-static void describe_descriptor(int descriptor, char *path, size_t size) {
-    char link[64];
-    snprintf(link, sizeof(link), "/proc/self/fd/%d", descriptor);
-    ssize_t length = readlink(link, path, size - 1);
-    if (length == -1) {
-        snprintf(path, size, "path unavailable, errno %d", errno);
-    } else {
-        path[length] = '\0';
-    }
-}
 "#
     };
     let body = format!(
@@ -361,7 +331,6 @@ static void describe_descriptor(int descriptor, char *path, size_t size) {
 #include <string.h>
 #include <unistd.h>
 {UNSET_INJECTION_VARIABLE}
-{describe_descriptor}
 static int close_armed = -1;
 static int requested_descriptor(const char *name, int descriptor) {{
     const char *value = getenv(name);
@@ -369,7 +338,6 @@ static int requested_descriptor(const char *name, int descriptor) {{
 }}
 typedef int (*fcntl_function)(int, int, ...);
 typedef int (*close_function)(int);
-typedef int (*execv_function)(const char *, char *const[]);
 {originals}
 int {fcntl_name}(int descriptor, int command, ...) {{
     if (command == F_GETFD) {{
@@ -381,7 +349,13 @@ int {fcntl_name}(int descriptor, int command, ...) {{
             errno = 0;
             return -1;
         }}
-        int result = real_fcntl(descriptor, command);
+        int result;
+        if (requested_descriptor("RUN_IF_PRESENT_REPORT_CLOSED_FD", descriptor)) {{
+            errno = EBADF;
+            result = -1;
+        }} else {{
+            result = real_fcntl(descriptor, command);
+        }}
         if (result == -1 && errno == EBADF &&
             requested_descriptor("RUN_IF_PRESENT_FAIL_CLOSE_FD", descriptor)) {{
             close_armed = descriptor;
@@ -397,33 +371,10 @@ int {close_name}(int descriptor) {{
     }}
     return real_close(descriptor);
 }}
-// A descriptor that should have been closed is reported on stdout, because stderr is the
-// descriptor under test, and fails with ENOENT: the wrapper maps it to exit 127, which neither
-// the expected replacement failure (126) nor its own prepare-execution failure (1) produces.
-int {execv_name}(const char *path, char *const argv[]) {{
-    const char *value = getenv("RUN_IF_PRESENT_REQUIRE_CLOSED_EXEC_FD");
-    if (value != NULL) {{
-        int descriptor = atoi(value);
-        errno = 0;
-        if (real_fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) {{
-            char target[1100];
-            char line[1200];
-            describe_descriptor(descriptor, target, sizeof(target));
-            int length = snprintf(line, sizeof(line),
-                "descriptor-state fixture: descriptor %d is open at exec: %s\n",
-                descriptor, target);
-            if (length > 0) write(STDOUT_FILENO, line, (size_t)length);
-            errno = ENOENT;
-            return -1;
-        }}
-    }}
-    return real_execv(path, argv);
-}}
 {interpose}
 "#,
         fcntl_name = names.0,
         close_name = names.1,
-        execv_name = names.2,
     );
     fs::write(&source, body).unwrap();
     let mut compiler = Command::new("cc");
@@ -1828,16 +1779,18 @@ fn a_descriptor_capture_failure_with_zero_errno_uses_operating_system_error_text
     assert!(diagnostic.contains(&io::Error::from_raw_os_error(0).to_string()));
 }
 
+// Descriptor 0 is reported closed by the fixture rather than closed for real: on macOS, with a
+// dylib inserted, a descriptor closed before exec was observed open (and not a file) by the time
+// the wrapper's constructor ran, so closing it for real does not reach the constructor there.
 #[test]
 fn a_descriptor_restore_failure_is_a_prepare_execution_error() {
     let temp = TempDir::new();
     let interposer = descriptor_state_interposer(&temp);
     let mut command = binary();
     command
+        .env("RUN_IF_PRESENT_REPORT_CLOSED_FD", "0")
         .env("RUN_IF_PRESENT_FAIL_CLOSE_FD", "0")
-        .env("RUN_IF_PRESENT_REQUIRE_CLOSED_EXEC_FD", "0")
         .args(["command", "/usr/bin/true"]);
-    close_descriptor_before_exec(&mut command, 0);
     preload(&mut command, &interposer);
 
     let output = command.output().unwrap();
