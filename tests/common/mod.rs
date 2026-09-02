@@ -1,11 +1,19 @@
 #![allow(dead_code)]
 
 use std::fs;
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+pub fn closed_pipe_writer() -> OwnedFd {
+    let (reader, writer) = UnixStream::pair().unwrap();
+    drop(reader);
+    OwnedFd::from(writer)
+}
 
 /// A directory under the system temporary directory, removed when dropped.
 pub struct TempDir(PathBuf);

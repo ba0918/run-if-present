@@ -1,10 +1,8 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
-use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{symlink, PermissionsExt};
-use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -12,18 +10,15 @@ use std::process::{Command, Output, Stdio};
 
 mod common;
 
-use common::TempDir;
+use common::{closed_pipe_writer, TempDir};
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_run-if-present"))
 }
 
 fn status_with_closed_stderr(mut command: Command) -> std::process::ExitStatus {
-    let (reader, writer) = UnixStream::pair().unwrap();
-    drop(reader);
-
     command
-        .stderr(Stdio::from(OwnedFd::from(writer)))
+        .stderr(Stdio::from(closed_pipe_writer()))
         .status()
         .unwrap()
 }

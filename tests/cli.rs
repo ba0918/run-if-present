@@ -1,31 +1,21 @@
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStringExt;
-use std::os::unix::io::FromRawFd;
 use std::process::Command;
 use std::process::Stdio;
 
 mod common;
 
-use common::TempDir;
+use common::{closed_pipe_writer, TempDir};
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_run-if-present"))
 }
 
 fn output_with_closed_stdout(arguments: &[&str]) -> std::process::Output {
-    unsafe extern "C" {
-        fn close(fd: i32) -> i32;
-        fn pipe(fds: *mut i32) -> i32;
-    }
-
-    let mut fds = [0; 2];
-    assert_eq!(unsafe { pipe(fds.as_mut_ptr()) }, 0);
-    assert_eq!(unsafe { close(fds[0]) }, 0);
-    let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
     binary()
         .args(arguments)
-        .stdout(Stdio::from(write_end))
+        .stdout(Stdio::from(closed_pipe_writer()))
         .output()
         .unwrap()
 }
