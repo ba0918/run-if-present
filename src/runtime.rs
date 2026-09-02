@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::cli::{Arguments, Condition};
 
+const ENOEXEC: i32 = 8;
 const SIGPIPE: i32 = 13;
 const SIG_IGN: usize = 1;
 const SIG_ERR: usize = usize::MAX;
@@ -129,7 +130,7 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
     let code = match error.kind() {
         io::ErrorKind::NotFound => 127,
         io::ErrorKind::PermissionDenied => 126,
-        _ if error.raw_os_error() == Some(8) => 126,
+        _ if error.raw_os_error() == Some(ENOEXEC) => 126,
         _ => 1,
     };
     Err(diagnostic("execute", execution.pathname, error, code))
@@ -306,8 +307,9 @@ fn account_database_home() -> Option<PathBuf> {
         fn getpwuid(uid: u32) -> *const Passwd;
     }
 
-    // The wrapper is single-threaded, and the account-database pointer is cloned immediately
-    // before another libc lookup can invalidate its static storage.
+    // std::env::home_dir() is not used: on Rust 1.85 it returns an empty HOME as-is instead of
+    // falling back to the user database, and it is still marked deprecated there. The wrapper is
+    // single-threaded, and the record is copied before another libc lookup can invalidate it.
     let record = unsafe { getpwuid(getuid()) };
     if record.is_null() {
         return None;
