@@ -33,7 +33,8 @@ fn runtime_source() -> String {
 fn help_exposes_only_the_approved_options() {
     for (arguments, expected) in [
         (&["--help"][..], vec!["--chdir", "--help", "--version"]),
-        (&["path", "--help"][..], vec!["--help"]),
+        (&["command", "--help"][..], vec![]),
+        (&["path", "--help"][..], vec![]),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_run-if-present"))
             .args(arguments)

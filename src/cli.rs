@@ -34,7 +34,7 @@ pub enum Condition {
         #[arg(allow_hyphen_values = true)]
         path: OsString,
 
-        #[arg(last = true, required = true, num_args = 1.., allow_hyphen_values = true)]
+        #[arg(last = true, num_args = 1.., allow_hyphen_values = true)]
         command: Vec<OsString>,
     },
 }
@@ -56,12 +56,33 @@ impl Arguments {
         }
     }
 
-    pub fn command_help_requested(&self) -> bool {
+    pub fn subcommand_help_requested(&self) -> Option<&'static str> {
+        match &self.condition {
+            Condition::Command { command, arguments }
+                if arguments.is_empty() && command == "--help" =>
+            {
+                Some("command")
+            }
+            Condition::Path { path, command } if command.is_empty() && path == "--help" => {
+                Some("path")
+            }
+            _ => None,
+        }
+    }
+
+    pub fn invalid_help_request(&self) -> bool {
         matches!(
             &self.condition,
             Condition::Command { command, arguments }
-                if arguments.is_empty() && command == "--help"
+                if !arguments.is_empty() && command == "--help"
+        ) || matches!(
+            &self.condition,
+            Condition::Path { path, command } if !command.is_empty() && path == "--help"
         )
+    }
+
+    pub fn missing_path_command(&self) -> bool {
+        matches!(&self.condition, Condition::Path { command, .. } if command.is_empty())
     }
 }
 

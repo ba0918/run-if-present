@@ -1,7 +1,9 @@
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::io::FromRawFd;
 use std::process::Command;
+use std::process::Stdio;
 
 mod common;
 
@@ -9,6 +11,23 @@ use common::TempDir;
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_run-if-present"))
+}
+
+fn output_with_closed_stdout(arguments: &[&str]) -> std::process::Output {
+    unsafe extern "C" {
+        fn close(fd: i32) -> i32;
+        fn pipe(fds: *mut i32) -> i32;
+    }
+
+    let mut fds = [0; 2];
+    assert_eq!(unsafe { pipe(fds.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { close(fds[0]) }, 0);
+    let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+    binary()
+        .args(arguments)
+        .stdout(Stdio::from(write_end))
+        .output()
+        .unwrap()
 }
 
 #[test]
@@ -165,6 +184,87 @@ fn writes_command_help_to_stdout_before_a_command_begins() {
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn writes_path_help_to_stdout_before_a_guard_begins() {
+    let output = binary().args(["path", "--help"]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn rejects_tokens_after_command_help() {
+    let output = binary()
+        .args(["command", "--help", "extra"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"run-if-present: syntax: invalid command line\n"
+    );
+}
+
+#[test]
+fn rejects_tokens_after_path_help() {
+    let output = binary()
+        .args(["path", "--help", "extra", "--", "true"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"run-if-present: syntax: invalid command line\n"
+    );
+}
+
+#[test]
+fn help_and_version_ignore_a_closed_stdout() {
+    for arguments in [
+        &["--help"][..],
+        &["--version"][..],
+        &["command", "--help"][..],
+        &["path", "--help"][..],
+    ] {
+        let output = output_with_closed_stdout(arguments);
+        assert_eq!(output.status.code(), Some(0), "{arguments:?}");
+        assert!(output.stderr.is_empty(), "{arguments:?}");
+    }
+}
+
+#[test]
+fn help_precedes_empty_chdir_validation() {
+    for arguments in [
+        &["--chdir", "", "command", "--help"][..],
+        &["--chdir", "", "path", "--help"][..],
+    ] {
+        let output = binary().args(arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{arguments:?}");
+        assert!(!output.stdout.is_empty(), "{arguments:?}");
+        assert!(output.stderr.is_empty(), "{arguments:?}");
+    }
+}
+
+#[test]
+fn long_wrapper_option_names_are_operands_after_a_subcommand() {
+    let directory = TempDir::new();
+    for name in ["--version", "--chdir"] {
+        directory.executable(name, b"#!/bin/sh\nexit 0\n");
+        let output = binary()
+            .env("PATH", directory.path())
+            .args(["command", name])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{name}");
+        assert!(output.stderr.is_empty(), "{name}");
+    }
 }
 
 #[test]
