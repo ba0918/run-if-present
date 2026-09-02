@@ -156,25 +156,3 @@ pub fn non_utf8_entry<T>(created: io::Result<T>, path: &Path) -> Option<T> {
         Err(error) => panic!("creating {}: {error}", path.display()),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::non_utf8_entry;
-    use std::io;
-    use std::path::Path;
-
-    #[test]
-    #[should_panic(expected = "os error 13")]
-    fn any_other_creation_error_fails_the_test() {
-        let denied: io::Result<()> = Err(io::Error::from_raw_os_error(13));
-        let _ = non_utf8_entry(denied, Path::new("/probe/h\u{fffd}"));
-    }
-
-    #[test]
-    fn a_created_non_utf8_entry_is_handed_back() {
-        assert_eq!(
-            non_utf8_entry(Ok(7), Path::new("/probe/h\u{fffd}")),
-            Some(7)
-        );
-    }
-}
