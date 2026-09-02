@@ -1,24 +1,40 @@
 use std::env;
 use std::ffi::{c_char, CStr, CString, OsStr, OsString};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 use crate::cli::{Arguments, Condition};
 
 const ENOEXEC: i32 = 8;
+const EBADF: i32 = 9;
+const F_GETFD: i32 = 1;
 const SIGPIPE: i32 = 13;
 const SIG_IGN: usize = 1;
 const SIG_ERR: usize = usize::MAX;
+const DESCRIPTOR_OPEN: i32 = 0;
+const DESCRIPTOR_CLOSED: i32 = -1;
+const DESCRIPTOR_UNKNOWN: i32 = -2;
 
 // Holds the SIGPIPE disposition the wrapper was started with, or SIG_ERR when it is unknown.
 static INHERITED_SIGPIPE: AtomicUsize = AtomicUsize::new(SIG_ERR);
+static INHERITED_STANDARD_DESCRIPTORS: [AtomicI32; 3] = [
+    AtomicI32::new(DESCRIPTOR_UNKNOWN),
+    AtomicI32::new(DESCRIPTOR_UNKNOWN),
+    AtomicI32::new(DESCRIPTOR_UNKNOWN),
+];
 
 unsafe extern "C" {
     fn signal(signal: i32, handler: usize) -> usize;
+    fn fcntl(descriptor: i32, command: i32, ...) -> i32;
+    fn close(descriptor: i32) -> i32;
+    #[cfg(target_os = "linux")]
+    fn __errno_location() -> *mut i32;
+    #[cfg(target_os = "macos")]
+    fn __error() -> *mut i32;
 }
 
 // Rust sets SIGPIPE to SIG_IGN before main, which the child would inherit through exec. This
@@ -27,13 +43,40 @@ unsafe extern "C" {
 #[used]
 #[cfg_attr(target_os = "linux", link_section = ".init_array")]
 #[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
-static CAPTURE_INHERITED_SIGPIPE: unsafe extern "C" fn() = capture_inherited_sigpipe;
+static CAPTURE_INHERITED_PROCESS_STATE: unsafe extern "C" fn() = capture_inherited_process_state;
 
-unsafe extern "C" fn capture_inherited_sigpipe() {
+unsafe extern "C" fn capture_inherited_process_state() {
     let inherited = unsafe { signal(SIGPIPE, SIG_IGN) };
     if inherited != SIG_ERR && unsafe { signal(SIGPIPE, inherited) } != SIG_ERR {
         INHERITED_SIGPIPE.store(inherited, Ordering::Relaxed);
     }
+
+    for (descriptor, state) in INHERITED_STANDARD_DESCRIPTORS.iter().enumerate() {
+        let result = unsafe { fcntl(descriptor as i32, F_GETFD) };
+        let captured = if result != -1 {
+            DESCRIPTOR_OPEN
+        } else {
+            let error = unsafe { current_errno() };
+            if error == EBADF {
+                DESCRIPTOR_CLOSED
+            } else if error > 0 {
+                error
+            } else {
+                DESCRIPTOR_UNKNOWN
+            }
+        };
+        state.store(captured, Ordering::Relaxed);
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn current_errno() -> i32 {
+    unsafe { *__errno_location() }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn current_errno() -> i32 {
+    unsafe { *__error() }
 }
 
 fn restore_inherited_sigpipe() -> io::Result<()> {
@@ -45,6 +88,26 @@ fn restore_inherited_sigpipe() -> io::Result<()> {
     }
     if unsafe { signal(SIGPIPE, inherited) } == SIG_ERR {
         return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn restore_inherited_standard_descriptors() -> io::Result<()> {
+    for (descriptor, state) in INHERITED_STANDARD_DESCRIPTORS.iter().enumerate() {
+        match state.load(Ordering::Relaxed) {
+            DESCRIPTOR_OPEN => {}
+            DESCRIPTOR_CLOSED => {
+                if unsafe { close(descriptor as i32) } == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            DESCRIPTOR_UNKNOWN => {
+                return Err(io::Error::other(
+                    "could not capture an inherited standard descriptor state",
+                ));
+            }
+            error => return Err(io::Error::from_raw_os_error(error)),
+        }
     }
     Ok(())
 }
@@ -62,7 +125,11 @@ impl RunError {
     }
 
     pub fn print(&self) {
-        eprintln!(
+        unsafe {
+            signal(SIGPIPE, SIG_IGN);
+        }
+        let _ = writeln!(
+            io::stderr().lock(),
             "run-if-present: {}: {}: {}",
             self.operation,
             escape_operand(&self.operand),
@@ -125,6 +192,8 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
     };
 
     restore_inherited_sigpipe()
+        .map_err(|source| diagnostic("prepare execution", execution.pathname.clone(), source, 1))?;
+    restore_inherited_standard_descriptors()
         .map_err(|source| diagnostic("prepare execution", execution.pathname.clone(), source, 1))?;
     let error = replace_process(&execution.pathname, &execution.argv0, &execution.arguments);
     let code = match error.kind() {

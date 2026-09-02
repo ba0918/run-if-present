@@ -1,8 +1,10 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -87,6 +89,37 @@ int main(int argc, char **argv) {
     );
 }
 
+fn compile_closed_descriptor_observer(temp: &TempDir, output: &Path) {
+    compile_c_program(
+        temp,
+        output,
+        br#"#include <errno.h>
+#include <fcntl.h>
+#include <stdlib.h>
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    int descriptor = atoi(argv[1]);
+    errno = 0;
+    return fcntl(descriptor, F_GETFD) == -1 && errno == EBADF ? 0 : 3;
+}
+"#,
+    );
+}
+
+fn close_descriptor_before_exec(command: &mut Command, descriptor: i32) {
+    unsafe {
+        command.pre_exec(move || {
+            unsafe extern "C" {
+                fn close(descriptor: i32) -> i32;
+            }
+            if close(descriptor) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 fn process_boundary_interposer(temp: &TempDir) -> PathBuf {
     let source = temp.path().join("process-boundary.c");
     let library = if cfg!(target_os = "macos") {
@@ -164,6 +197,116 @@ int execv(const char *path, char *const argv[]) {{
         .unwrap();
     assert!(status.success());
     library
+}
+
+fn descriptor_state_interposer(temp: &TempDir) -> PathBuf {
+    let source = temp.path().join("descriptor-state.c");
+    let library = if cfg!(target_os = "macos") {
+        temp.path().join("libdescriptor-state.dylib")
+    } else {
+        temp.path().join("libdescriptor-state.so")
+    };
+    let interpose = if cfg!(target_os = "macos") {
+        r#"
+#define INTERPOSE(replacement, replacee) \
+    __attribute__((used)) static struct { const void *replacement_ptr; const void *replacee_ptr; } \
+    interpose_##replacee __attribute__((section("__DATA,__interpose"))) = \
+    { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee };
+INTERPOSE(interposed_fcntl, fcntl)
+INTERPOSE(interposed_close, close)
+INTERPOSE(interposed_execv, execv)
+"#
+    } else {
+        ""
+    };
+    let names = if cfg!(target_os = "macos") {
+        ("interposed_fcntl", "interposed_close", "interposed_execv")
+    } else {
+        ("fcntl", "close", "execv")
+    };
+    let body = format!(
+        r#"#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <unistd.h>
+static int close_armed = -1;
+static int requested_descriptor(const char *name, int descriptor) {{
+    const char *value = getenv(name);
+    return value != NULL && atoi(value) == descriptor;
+}}
+typedef int (*fcntl_function)(int, int, ...);
+typedef int (*close_function)(int);
+typedef int (*execv_function)(const char *, char *const[]);
+int {fcntl_name}(int descriptor, int command, ...) {{
+    fcntl_function real_fcntl = (fcntl_function)dlsym(RTLD_NEXT, "fcntl");
+    if (command == F_GETFD) {{
+        if (requested_descriptor("RUN_IF_PRESENT_FAIL_FCNTL_FD", descriptor)) {{
+            errno = EIO;
+            return -1;
+        }}
+        int result = real_fcntl(descriptor, command);
+        if (result == -1 && errno == EBADF &&
+            requested_descriptor("RUN_IF_PRESENT_FAIL_CLOSE_FD", descriptor)) {{
+            close_armed = descriptor;
+        }}
+        return result;
+    }}
+    return real_fcntl(descriptor, command, 0);
+}}
+int {close_name}(int descriptor) {{
+    if (descriptor == close_armed) {{
+        errno = EIO;
+        return -1;
+    }}
+    close_function real_close = (close_function)dlsym(RTLD_NEXT, "close");
+    return real_close(descriptor);
+}}
+int {execv_name}(const char *path, char *const argv[]) {{
+    const char *value = getenv("RUN_IF_PRESENT_REQUIRE_CLOSED_EXEC_FD");
+    fcntl_function real_fcntl = (fcntl_function)dlsym(RTLD_NEXT, "fcntl");
+    if (value != NULL) {{
+        int descriptor = atoi(value);
+        errno = 0;
+        if (real_fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) {{
+            errno = EIO;
+            return -1;
+        }}
+    }}
+    execv_function real_execv = (execv_function)dlsym(RTLD_NEXT, "execv");
+    return real_execv(path, argv);
+}}
+{interpose}
+"#,
+        fcntl_name = names.0,
+        close_name = names.1,
+        execv_name = names.2,
+    );
+    fs::write(&source, body).unwrap();
+    let mut compiler = Command::new("cc");
+    if cfg!(target_os = "macos") {
+        compiler.args(["-dynamiclib"]);
+    } else {
+        compiler.args(["-shared", "-fPIC"]);
+    }
+    let status = compiler
+        .arg(&source)
+        .arg("-o")
+        .arg(&library)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    library
+}
+
+fn preload(command: &mut Command, library: &Path) {
+    if cfg!(target_os = "macos") {
+        command.env("DYLD_INSERT_LIBRARIES", library);
+    } else {
+        command.env("LD_PRELOAD", library);
+    }
 }
 
 #[test]
@@ -1310,6 +1453,127 @@ fn child_stderr_is_preserved() {
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
     assert_eq!(output.stderr, b"child-error");
+}
+
+#[test]
+fn standard_descriptors_closed_at_start_remain_closed_in_the_child() {
+    let temp = TempDir::new();
+    let observer = temp.path().join("closed-descriptor-observer");
+    compile_closed_descriptor_observer(&temp, &observer);
+
+    for descriptor in 0..=2 {
+        let mut command = binary();
+        command
+            .arg("command")
+            .arg(&observer)
+            .arg(descriptor.to_string());
+        close_descriptor_before_exec(&mut command, descriptor);
+
+        let status = command.status().unwrap();
+        assert_eq!(status.code(), Some(0), "descriptor {descriptor}");
+    }
+}
+
+#[test]
+fn a_replacement_failure_keeps_its_exit_code_when_stderr_is_a_closed_pipe() {
+    let temp = TempDir::new();
+    let program = temp.path().join("not-executable");
+    fs::write(&program, b"not executable").unwrap();
+    let (reader, writer) = UnixStream::pair().unwrap();
+    drop(reader);
+
+    let status = binary()
+        .arg("command")
+        .arg(program)
+        .stderr(Stdio::from(OwnedFd::from(writer)))
+        .status()
+        .unwrap();
+
+    assert_eq!(status.code(), Some(126));
+}
+
+#[test]
+fn a_descriptor_capture_failure_is_a_prepare_execution_error() {
+    let temp = TempDir::new();
+    let interposer = descriptor_state_interposer(&temp);
+    let mut command = binary();
+    command
+        .env("RUN_IF_PRESENT_FAIL_FCNTL_FD", "0")
+        .args(["command", "/bin/true"]);
+    preload(&mut command, &interposer);
+
+    let output = command.output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr.iter().filter(|byte| **byte == b'\n').count(),
+        1
+    );
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/bin/true\":"));
+    assert!(diagnostic.contains(&io::Error::from_raw_os_error(5).to_string()));
+}
+
+#[test]
+fn a_descriptor_restore_failure_is_a_prepare_execution_error() {
+    let temp = TempDir::new();
+    let interposer = descriptor_state_interposer(&temp);
+    let mut command = binary();
+    command
+        .env("RUN_IF_PRESENT_FAIL_CLOSE_FD", "0")
+        .args(["command", "/bin/true"]);
+    close_descriptor_before_exec(&mut command, 0);
+    preload(&mut command, &interposer);
+
+    let output = command.output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr.iter().filter(|byte| **byte == b'\n').count(),
+        1
+    );
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(diagnostic.starts_with("run-if-present: prepare execution: \"/bin/true\":"));
+    assert!(diagnostic.contains(&io::Error::from_raw_os_error(5).to_string()));
+}
+
+#[test]
+fn a_replacement_failure_keeps_its_exit_code_when_stderr_started_closed() {
+    let temp = TempDir::new();
+    let interposer = descriptor_state_interposer(&temp);
+    let program = temp.executable("invalid-format", b"not executable format");
+    let mut command = binary();
+    command
+        .env("RUN_IF_PRESENT_REQUIRE_CLOSED_EXEC_FD", "2")
+        .arg("command")
+        .arg(program);
+    close_descriptor_before_exec(&mut command, 2);
+    preload(&mut command, &interposer);
+
+    let status = command.status().unwrap();
+
+    assert_eq!(status.code(), Some(126));
+}
+
+#[test]
+fn chdir_does_not_update_the_callers_pwd_environment_entry() {
+    let temp = TempDir::new();
+    let output = binary()
+        .env("PWD", "caller-pwd-marker")
+        .arg("--chdir")
+        .arg(temp.path())
+        .args(["command", "/usr/bin/env"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .any(|line| line == b"PWD=caller-pwd-marker"));
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
