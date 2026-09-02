@@ -9,11 +9,12 @@ dependency must still fail the hook.
 
 ## Install
 
-With [mise](https://mise.jdx.dev/), the `github` backend downloads the release archive for the
-current operating system and architecture and puts the executable on `PATH`:
+With [mise](https://mise.jdx.dev/), the `github` backend downloads the latest release archive for
+the current operating system and architecture and puts the executable on `PATH`. Append
+`@0.1.0` to pin a version:
 
 ```sh
-mise use -g github:ba0918/run-if-present@0.1.0
+mise use -g github:ba0918/run-if-present
 ```
 
 To install from crates.io with a Rust toolchain:
