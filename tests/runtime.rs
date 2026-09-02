@@ -805,6 +805,48 @@ fn a_permission_denied_path_candidate_is_an_inspection_failure() {
 }
 
 #[test]
+fn an_inspection_failure_does_not_hide_a_later_usable_candidate() {
+    let temp = TempDir::new();
+    let locked = temp.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("tool"), b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    temp.executable("tool", b"#!/bin/sh\nprintf usable");
+    let path = std::env::join_paths([locked.as_path(), temp.path()]).unwrap();
+
+    let output = permission_test_binary(&temp)
+        .env("PATH", path)
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"usable");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn an_inspection_failure_takes_priority_over_an_unusable_candidate() {
+    let temp = TempDir::new();
+    let locked = temp.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("tool"), b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    fs::write(temp.path().join("tool"), b"not executable").unwrap();
+    let path = std::env::join_paths([locked.as_path(), temp.path()]).unwrap();
+
+    let output = permission_test_binary(&temp)
+        .env("PATH", path)
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_permission_diagnostic(&output, "inspect executable");
+}
+
+#[test]
 fn an_executable_disappearing_after_resolution_exits_127() {
     let temp = TempDir::new();
     let program = temp.executable("disappears", b"#!/bin/sh\nexit 0\n");
