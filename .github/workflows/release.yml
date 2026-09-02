@@ -130,6 +130,7 @@ jobs:
           crate="crate-package/run-if-present-$VERSION.crate"
           local_checksum=$(sha256sum "$crate" | awk '{print $1}')
           status=$(curl --silent --show-error --output /tmp/crate-version.json \
+            --user-agent "run-if-present release workflow (https://github.com/ba0918/run-if-present)" \
             --write-out '%{http_code}' \
             "https://crates.io/api/v1/crates/run-if-present/$VERSION")
           if [[ "$status" == 200 ]]; then
@@ -140,6 +141,7 @@ jobs:
             SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
             cargo publish --locked
             status=$(curl --silent --show-error --output /tmp/crate-version.json \
+              --user-agent "run-if-present release workflow (https://github.com/ba0918/run-if-present)" \
               --write-out '%{http_code}' \
               "https://crates.io/api/v1/crates/run-if-present/$VERSION")
             [[ "$status" == 200 ]]
