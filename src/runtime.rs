@@ -176,7 +176,7 @@ fn replace_process(pathname: &OsStr, argv0: &OsStr, arguments: &[OsString]) -> i
 
 fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
     if command.as_bytes().contains(&b'/') {
-        return classify_explicit(PathBuf::from(command));
+        return select(classify(PathBuf::from(command)));
     }
 
     let Some(path) = env::var_os("PATH").filter(|value| !value.is_empty()) else {
@@ -185,46 +185,36 @@ fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
     let cwd =
         env::current_dir().map_err(|source| diagnostic("working directory", ".", source, 1))?;
 
-    let mut inspection_error = None;
-    let mut unusable = None;
+    let mut first_inspection_failure = None;
+    let mut first_unusable = None;
     for directory in env::split_paths(&path) {
         let literal = literal_candidate(command, &directory, &cwd);
-        if let Ok(discovered) = which::which_in(command, Some(&directory), &cwd) {
-            if same_lexical_path_ignoring_curdir(&discovered, &literal) {
-                if let Some(candidate) = retain_search_result(
-                    classify_search_candidate(discovered),
-                    &mut inspection_error,
-                    &mut unusable,
-                ) {
-                    return Ok(Some(candidate));
-                }
-                continue;
+        // `which` expands a leading `~` in PATH entries and drops `.` components; the
+        // specification keeps PATH entries literal and relative to the effective directory, so
+        // its discovery counts only when it names the same file as the literal candidate.
+        let candidate = match which::which_in(command, Some(&directory), &cwd) {
+            Ok(discovered) if same_lexical_path_ignoring_curdir(&discovered, &literal) => {
+                discovered
             }
-        }
-        if let Some(candidate) = retain_search_result(
-            classify_search_candidate(literal),
-            &mut inspection_error,
-            &mut unusable,
-        ) {
-            return Ok(Some(candidate));
+            _ => literal,
+        };
+        match classify(candidate) {
+            Candidate::Invokable(found) => return Ok(Some(found)),
+            Candidate::Absent => {}
+            unusable @ Candidate::Unusable(_) => {
+                first_unusable.get_or_insert(unusable);
+            }
+            failure @ Candidate::InspectionFailed(..) => {
+                first_inspection_failure.get_or_insert(failure);
+            }
         }
     }
 
-    if let Some((candidate, error)) = inspection_error {
-        Err(diagnostic("inspect executable", candidate, error, 1))
-    } else if let Some(candidate) = unusable {
-        Err(diagnostic(
-            "resolve executable",
-            candidate,
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "not an executable regular file",
-            ),
-            126,
-        ))
-    } else {
-        Ok(None)
-    }
+    select(
+        first_inspection_failure
+            .or(first_unusable)
+            .unwrap_or(Candidate::Absent),
+    )
 }
 
 fn same_lexical_path_ignoring_curdir(left: &Path, right: &Path) -> bool {
@@ -243,59 +233,38 @@ fn literal_candidate(command: &OsStr, directory: &Path, cwd: &Path) -> PathBuf {
     }
 }
 
-enum SearchCandidate {
+enum Candidate {
     Invokable(PathBuf),
     Absent,
     Unusable(PathBuf),
     InspectionFailed(PathBuf, io::Error),
 }
 
-fn classify_search_candidate(candidate: PathBuf) -> SearchCandidate {
+fn classify(candidate: PathBuf) -> Candidate {
     match fs::metadata(&candidate) {
-        Ok(metadata) if is_invokable(&metadata) => SearchCandidate::Invokable(candidate),
-        Ok(_) => SearchCandidate::Unusable(candidate),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => SearchCandidate::Absent,
-        Err(error) => SearchCandidate::InspectionFailed(candidate, error),
+        Ok(metadata) if is_invokable(&metadata) => Candidate::Invokable(candidate),
+        Ok(_) => Candidate::Unusable(candidate),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Candidate::Absent,
+        Err(error) => Candidate::InspectionFailed(candidate, error),
     }
 }
 
-fn retain_search_result(
-    result: SearchCandidate,
-    inspection_error: &mut Option<(PathBuf, io::Error)>,
-    unusable: &mut Option<PathBuf>,
-) -> Option<PathBuf> {
-    match result {
-        SearchCandidate::Invokable(candidate) => Some(candidate),
-        SearchCandidate::Absent => None,
-        SearchCandidate::Unusable(candidate) => {
-            if unusable.is_none() {
-                *unusable = Some(candidate);
-            }
-            None
-        }
-        SearchCandidate::InspectionFailed(candidate, error) => {
-            if inspection_error.is_none() {
-                *inspection_error = Some((candidate, error));
-            }
-            None
-        }
-    }
-}
-
-fn classify_explicit(candidate: PathBuf) -> Result<Option<PathBuf>, RunError> {
-    match fs::metadata(&candidate) {
-        Ok(metadata) if is_invokable(&metadata) => Ok(Some(candidate)),
-        Ok(_) => Err(diagnostic(
+fn select(candidate: Candidate) -> Result<Option<PathBuf>, RunError> {
+    match candidate {
+        Candidate::Invokable(found) => Ok(Some(found)),
+        Candidate::Absent => Ok(None),
+        Candidate::Unusable(found) => Err(diagnostic(
             "resolve executable",
-            candidate,
+            found,
             io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "not an executable regular file",
             ),
             126,
         )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(diagnostic("inspect executable", candidate, error, 1)),
+        Candidate::InspectionFailed(found, error) => {
+            Err(diagnostic("inspect executable", found, error, 1))
+        }
     }
 }
 
