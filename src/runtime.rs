@@ -74,21 +74,11 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
     if let Some(directory) = arguments.chdir {
         let directory = expand_tilde(&directory)
             .map_err(|source| diagnostic("expand", directory, source, 1))?;
-        match fs::metadata(&directory) {
-            Ok(metadata) if !metadata.is_dir() => {
-                return Err(diagnostic(
-                    "chdir",
-                    directory,
-                    io::Error::new(io::ErrorKind::NotADirectory, "not a directory"),
-                    1,
-                ));
-            }
-            Ok(_) => {}
+        match env::set_current_dir(&directory) {
+            Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(diagnostic("inspect", directory, error, 1)),
+            Err(error) => return Err(diagnostic("chdir", directory, error, 1)),
         }
-        env::set_current_dir(&directory)
-            .map_err(|source| diagnostic("chdir", directory, source, 1))?;
     }
 
     let execution = match arguments.condition {
