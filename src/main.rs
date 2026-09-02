@@ -29,7 +29,9 @@ fn main() {
     };
     if let Some(name) = arguments.subcommand_help_requested() {
         let mut command = cli::Arguments::command();
-        let subcommand = command.find_subcommand_mut(name).expect("subcommand exists");
+        let subcommand = command
+            .find_subcommand_mut(name)
+            .expect("subcommand exists");
         let _ = subcommand.print_help();
         let _ = writeln!(std::io::stdout());
         return;
