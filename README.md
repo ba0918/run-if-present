@@ -71,12 +71,22 @@ run-if-present --chdir . path ./Cargo.toml -- printf '%s\n' present
 The `--` separator is required in `path` mode. In `command` mode, every token after the command
 name belongs to that command, including options and empty arguments.
 
+An exact `--help` in place of the command or path guard prints that subcommand's help only when
+it is the final token. If any token follows it, the command line is invalid and exits 2. The
+short form `-h` is not a wrapper help option.
+
 Only an exact `~` or leading `~/` in `--chdir` and path guards is expanded. Executable names and
 child arguments are never rewritten.
 
 ## Results and diagnostics
 
 - A confirmed-absent optional command, path, or `--chdir` directory exits 0 without output.
+- A path that passes through a regular file is confirmed absent. For example, a guard such as
+  `file/child` is skipped rather than treated as an inspection error.
+- A dangling symbolic link in a `PATH` directory is not an executable candidate, so the search
+  continues. If no candidate remains in `command` mode, that optional command is confirmed absent.
+- A `--chdir` target that exists as a regular file is not absent: changing to it exits 1 with a
+  diagnostic.
 - Invalid syntax exits 2 and writes to standard error.
 - Inspection, home expansion, or directory changes that fail exit 1 with one diagnostic.
 - A program found but not invokable exits 126 with one diagnostic.
