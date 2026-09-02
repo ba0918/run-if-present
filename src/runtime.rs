@@ -5,28 +5,24 @@ use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::cli::{Arguments, Condition};
 
 const SIGPIPE: i32 = 13;
-const SIG_DFL: usize = 0;
 const SIG_IGN: usize = 1;
 const SIG_ERR: usize = usize::MAX;
-const SIGPIPE_UNKNOWN: u8 = 0;
-const SIGPIPE_DEFAULT: u8 = 1;
-const SIGPIPE_IGNORED: u8 = 2;
-const SIGPIPE_CAPTURE_FAILED: u8 = 3;
 
-static INHERITED_SIGPIPE: AtomicU8 = AtomicU8::new(SIGPIPE_UNKNOWN);
+// Holds the SIGPIPE disposition the wrapper was started with, or SIG_ERR when it is unknown.
+static INHERITED_SIGPIPE: AtomicUsize = AtomicUsize::new(SIG_ERR);
 
 unsafe extern "C" {
     fn signal(signal: i32, handler: usize) -> usize;
 }
 
-// Rust changes SIGPIPE before main, but exec must preserve a parent's explicit SIG_IGN. This
-// loader constructor runs before Rust lang_start and records only the disposition semantics that
-// survive exec: ignored remains ignored, while default and caught handlers become default.
+// Rust sets SIGPIPE to SIG_IGN before main, which the child would inherit through exec. This
+// loader constructor runs earlier and records the caller's disposition; exec has already reset
+// any caught handler, so only SIG_DFL or SIG_IGN can be observed here.
 #[used]
 #[cfg_attr(target_os = "linux", link_section = ".init_array")]
 #[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
@@ -34,43 +30,22 @@ static CAPTURE_INHERITED_SIGPIPE: unsafe extern "C" fn() = capture_inherited_sig
 
 unsafe extern "C" fn capture_inherited_sigpipe() {
     let inherited = unsafe { signal(SIGPIPE, SIG_IGN) };
-    if inherited == SIG_ERR {
-        INHERITED_SIGPIPE.store(SIGPIPE_CAPTURE_FAILED, Ordering::Relaxed);
-        return;
+    if inherited != SIG_ERR && unsafe { signal(SIGPIPE, inherited) } != SIG_ERR {
+        INHERITED_SIGPIPE.store(inherited, Ordering::Relaxed);
     }
-    let disposition = if inherited == SIG_IGN {
-        SIGPIPE_IGNORED
-    } else {
-        SIGPIPE_DEFAULT
-    };
-    if unsafe { signal(SIGPIPE, inherited) } == SIG_ERR {
-        INHERITED_SIGPIPE.store(SIGPIPE_CAPTURE_FAILED, Ordering::Relaxed);
-        return;
-    }
-    INHERITED_SIGPIPE.store(disposition, Ordering::Relaxed);
 }
 
-fn restore_inherited_sigpipe_for_exec() -> io::Result<()> {
-    let handler = match INHERITED_SIGPIPE.load(Ordering::Relaxed) {
-        SIGPIPE_DEFAULT => SIG_DFL,
-        SIGPIPE_IGNORED => SIG_IGN,
-        SIGPIPE_UNKNOWN => {
-            return Err(io::Error::other(
-                "SIGPIPE disposition constructor did not run",
-            ));
-        }
-        SIGPIPE_CAPTURE_FAILED => {
-            return Err(io::Error::other(
-                "could not capture the inherited SIGPIPE disposition",
-            ));
-        }
-        _ => return Err(io::Error::other("invalid captured SIGPIPE disposition")),
-    };
-    if unsafe { signal(SIGPIPE, handler) } == SIG_ERR {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
+fn restore_inherited_sigpipe() -> io::Result<()> {
+    let inherited = INHERITED_SIGPIPE.load(Ordering::Relaxed);
+    if inherited == SIG_ERR {
+        return Err(io::Error::other(
+            "could not capture the inherited SIGPIPE disposition",
+        ));
     }
+    if unsafe { signal(SIGPIPE, inherited) } == SIG_ERR {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 pub enum RunError {
@@ -167,17 +142,9 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
         }
     };
 
-    let error = match replace_process(&execution.pathname, &execution.argv0, &execution.arguments) {
-        ReplaceProcessError::RestoreSignal(source) => {
-            return Err(diagnostic(
-                "prepare execution",
-                execution.pathname,
-                source,
-                1,
-            ));
-        }
-        ReplaceProcessError::Execute(error) => error,
-    };
+    restore_inherited_sigpipe()
+        .map_err(|source| diagnostic("prepare execution", execution.pathname.clone(), source, 1))?;
+    let error = replace_process(&execution.pathname, &execution.argv0, &execution.arguments);
     let code = match error.kind() {
         io::ErrorKind::NotFound => 127,
         io::ErrorKind::PermissionDenied => 126,
@@ -193,12 +160,7 @@ struct Execution {
     arguments: Vec<OsString>,
 }
 
-enum ReplaceProcessError {
-    RestoreSignal(io::Error),
-    Execute(io::Error),
-}
-
-fn replace_process(pathname: &OsStr, argv0: &OsStr, arguments: &[OsString]) -> ReplaceProcessError {
+fn replace_process(pathname: &OsStr, argv0: &OsStr, arguments: &[OsString]) -> io::Error {
     let pathname = CString::new(pathname.as_bytes()).expect("OS strings cannot contain NUL bytes");
     let mut argv = Vec::with_capacity(arguments.len() + 1);
     argv.push(CString::new(argv0.as_bytes()).expect("OS strings cannot contain NUL bytes"));
@@ -212,17 +174,13 @@ fn replace_process(pathname: &OsStr, argv0: &OsStr, arguments: &[OsString]) -> R
         fn execv(pathname: *const c_char, argv: *const *const c_char) -> i32;
     }
 
-    if let Err(error) = restore_inherited_sigpipe_for_exec() {
-        return ReplaceProcessError::RestoreSignal(error);
-    }
-
     // execv hands the child libc's live environment array untouched; rebuilding it through Rust
     // would discard duplicate keys and entries without `=`. execvp is avoided for its shell
     // fallback on ENOEXEC.
     unsafe {
         execv(pathname.as_ptr(), argv_pointers.as_ptr());
     }
-    ReplaceProcessError::Execute(io::Error::last_os_error())
+    io::Error::last_os_error()
 }
 
 fn resolve_command(command: &OsStr) -> Result<Option<PathBuf>, RunError> {
