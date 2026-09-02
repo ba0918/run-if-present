@@ -84,9 +84,9 @@ directory. A counter-example is evaluating the condition in the caller's directo
 
 Only an exact `~` or leading `~/` in wrapper-owned paths—the `path` guard and `--chdir`—is
 expanded. Executables and child arguments are never rewritten. `~user` remains a literal relative
-path. On Unix, expansion uses `std::env::home_dir()`: a non-empty `HOME` value is used first, and
-an unset or empty `HOME` falls back to the operating system's user database. Non-UTF-8 values are
-retained. If neither source yields a non-empty home path, the wrapper exits 1 with a diagnostic;
+path. On Unix, a non-empty `HOME` value is used first, and an unset or empty `HOME` falls back to
+the home field of the user-database record for the real user ID (`getpwuid`). Non-UTF-8 values
+are retained. If neither source yields a non-empty home path, the wrapper exits 1 with a diagnostic;
 an empty path returned by the user database is not expanded relative to the current directory.
 
 Success is observable when a quoted `~/bin` guard expands but a child argument `~/input` does not.
@@ -338,6 +338,9 @@ is adding a speculative option for possible later use.
 - Skipping all lookup, inspection, or launch errors: only confirmed absence is optional.
 - Zero dependencies: an established crate owns parsing, with local code only where its contract
   is insufficient.
+- `std::env::home_dir()` for the home path: on Rust 1.85 it returns an empty `HOME` as-is instead
+  of falling back to the user database, and it is deprecated there, so the fallback that Section 6
+  requires is read from the user database directly.
 - The `which` crate for discovery: it expands a leading `~` in `PATH` entries and normalises `.`
   components, so its result could only be accepted after comparing it with the literal candidate
   that local code had already built; the guard was larger than the discovery it protected.
