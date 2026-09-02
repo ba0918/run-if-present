@@ -1363,16 +1363,16 @@ fn a_tilde_path_entry_is_literal_and_relative_to_the_effective_directory() {
 }
 
 #[test]
-fn the_first_regular_file_with_any_execute_bit_is_not_bypassed() {
+fn an_executable_whose_execute_bit_is_unavailable_to_the_caller_exits_126() {
     let first = TempDir::new();
     let second = TempDir::new();
     let first_tool = first.path().join("tool");
-    fs::write(&first_tool, b"not an executable format").unwrap();
+    fs::write(&first_tool, b"#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(&first_tool, fs::Permissions::from_mode(0o010)).unwrap();
     second.executable("tool", b"#!/bin/sh\nprintf second");
     let path = std::env::join_paths([first.path(), second.path()]).unwrap();
 
-    let output = binary()
+    let output = permission_test_binary(&first)
         .env("PATH", path)
         .args(["command", "tool"])
         .output()
@@ -1380,7 +1380,14 @@ fn the_first_regular_file_with_any_execute_bit_is_not_bypassed() {
 
     assert_eq!(output.status.code(), Some(126));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: execute:"));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "run-if-present: execute: \"{}\": {}\n",
+            first_tool.display(),
+            io::Error::from_raw_os_error(13)
+        )
+    );
 }
 
 #[test]
