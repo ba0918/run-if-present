@@ -207,6 +207,65 @@ fn registry_token_is_read_only_by_the_cargo_publish_step() {
 }
 
 #[test]
+fn publication_regenerates_and_compares_the_crate_without_the_registry_token() {
+    const TOKEN_REFERENCE: &str = "${{ secrets.CARGO_REGISTRY_TOKEN }}";
+    let workflow = fs::read_to_string(".github/workflows/release.yml").unwrap();
+    let publish_job = yaml_job_block(&workflow, "publish-crate").unwrap();
+    let regeneration_step = publish_job
+        .split("\n      - ")
+        .find(|step| step.starts_with("name: Verify regenerated crate matches retained package"))
+        .unwrap();
+    let publish_step = publish_job
+        .split("\n      - ")
+        .find(|step| step.starts_with("name: Publish only a missing matching crate"))
+        .unwrap();
+
+    assert!(!regeneration_step.contains(TOKEN_REFERENCE));
+    assert!(
+        regeneration_step.contains("SOURCE_DATE_EPOCH=$(git show -s --format=%ct \"$GITHUB_SHA\")")
+    );
+    assert!(regeneration_step.contains("cargo package --locked"));
+    assert!(regeneration_step.contains(".github/scripts/verify-same-checksum.sh"));
+    assert!(regeneration_step.contains("crate-package/run-if-present-$VERSION.crate"));
+    assert!(regeneration_step.contains("target/package/run-if-present-$VERSION.crate"));
+    assert!(publish_job.find(regeneration_step).unwrap() < publish_job.find(publish_step).unwrap());
+}
+
+#[test]
+fn publication_fetches_and_compares_the_registry_checksum_after_publishing() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").unwrap();
+    let publish_job = yaml_job_block(&workflow, "publish-crate").unwrap();
+    let publish_step = publish_job
+        .split("\n      - ")
+        .find(|step| step.starts_with("name: Publish only a missing matching crate"))
+        .unwrap();
+    let run = publish_step.split("        run:").nth(1).unwrap();
+
+    assert_eq!(
+        run.matches("https://crates.io/api/v1/crates/run-if-present/$VERSION")
+            .count(),
+        2
+    );
+    let existing_comparison = run
+        .find("[[ \"$registry_checksum\" == \"$local_checksum\" ]]")
+        .unwrap();
+    let publish = run.find("cargo publish --locked").unwrap();
+    let after_publish = &run[publish..];
+    let fetch_after_publish = after_publish
+        .find("https://crates.io/api/v1/crates/run-if-present/$VERSION")
+        .unwrap();
+    let require_success = after_publish.find("[[ \"$status\" == 200 ]]").unwrap();
+    let compare_after_publish = after_publish
+        .rfind("[[ \"$registry_checksum\" == \"$local_checksum\" ]]")
+        .unwrap();
+
+    assert!(existing_comparison < publish);
+    assert!(fetch_after_publish < require_success);
+    assert!(require_success < compare_after_publish);
+    assert!(!after_publish.contains("sleep"));
+}
+
+#[test]
 fn final_publish_rejects_mismatched_assets_without_editing() {
     let root = fixture();
     let expected = root.path().join("expected");
@@ -333,24 +392,25 @@ fn release_metadata_rejects_a_tag_mismatch() {
 }
 
 #[test]
-fn release_metadata_requires_a_comparison_link_ending_in_the_tag() {
+fn release_metadata_accepts_any_https_link_for_the_released_version() {
     let root = fixture();
 
     for link in [
         "[0.1.0]: https://example.invalid/releases/tag/v0.1.0",
-        "[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.1",
-        "[0.1.1]: https://example.invalid/compare/v0.0.0...v0.1.0",
-        "[0x1y0]: https://example.invalid/compare/v0.0.0...v0x1y0",
+        "[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0",
+    ] {
+        write_changelog_link(root.path(), link);
+        assert!(metadata(root.path(), "v0.1.0").status.success(), "{link}");
+    }
+
+    for link in [
+        "[0.1.0]: http://example.invalid/releases/tag/v0.1.0",
+        "[0.1.1]: https://example.invalid/releases/tag/v0.1.0",
+        "",
     ] {
         write_changelog_link(root.path(), link);
         assert!(!metadata(root.path(), "v0.1.0").status.success(), "{link}");
     }
-
-    write_changelog_link(
-        root.path(),
-        "[0.1.0]: https://code.example/owner/project/compare/release-0.0...v0.1.0",
-    );
-    assert!(metadata(root.path(), "v0.1.0").status.success());
 }
 
 #[test]

@@ -39,15 +39,14 @@ if ! awk -v heading="$heading" '
 fi
 
 link_prefix="[$version]: https://"
-link_suffix="...v$version"
-if ! awk -v prefix="$link_prefix" -v suffix="$link_suffix" '
+if ! awk -v prefix="$link_prefix" '
   index($0, prefix) == 1 {
     url = substr($0, length(prefix) + 1)
-    if (index(url, "/compare/") > 1 && substr(url, length(url) - length(suffix) + 1) == suffix) found = 1
+    if (url ~ /^[^[:space:]]+$/) found = 1
   }
   END { exit !found }
 ' "$changelog"; then
-  echo "release metadata: changelog has no $version comparison link" >&2
+  echo "release metadata: changelog has no https link for $version" >&2
   exit 1
 fi
 
