@@ -176,14 +176,6 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
                 1,
             ));
         }
-        ReplaceProcessError::Environment(source) => {
-            return Err(diagnostic(
-                "prepare execution",
-                execution.pathname,
-                source,
-                1,
-            ));
-        }
         ReplaceProcessError::Execute(error) => error,
     };
     let code = match error.kind() {
@@ -203,44 +195,7 @@ struct Execution {
 
 enum ReplaceProcessError {
     RestoreSignal(io::Error),
-    Environment(io::Error),
     Execute(io::Error),
-}
-
-#[cfg(target_os = "linux")]
-fn original_environment_pointer() -> io::Result<*const *const c_char> {
-    unsafe extern "C" {
-        static mut environ: *mut *mut c_char;
-    }
-
-    // Reading libc's pointer does not mutate the environment. The pointed-to array remains valid
-    // because the wrapper never calls an environment-mutating API before execve.
-    let environment = unsafe { environ };
-    if environment.is_null() {
-        Err(io::Error::other("process environment is unavailable"))
-    } else {
-        Ok(environment as *const *const c_char)
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn original_environment_pointer() -> io::Result<*const *const c_char> {
-    unsafe extern "C" {
-        fn _NSGetEnviron() -> *mut *mut *mut c_char;
-    }
-
-    // Darwin exposes the address of its live environ pointer. Read it directly so duplicate and
-    // non-key/value entries reach execve without a Rust environment round-trip.
-    let environment_slot = unsafe { _NSGetEnviron() };
-    if environment_slot.is_null() {
-        return Err(io::Error::other("process environment is unavailable"));
-    }
-    let environment = unsafe { *environment_slot };
-    if environment.is_null() {
-        Err(io::Error::other("process environment is unavailable"))
-    } else {
-        Ok(environment as *const *const c_char)
-    }
 }
 
 fn replace_process(pathname: &OsStr, argv0: &OsStr, arguments: &[OsString]) -> ReplaceProcessError {
@@ -254,26 +209,18 @@ fn replace_process(pathname: &OsStr, argv0: &OsStr, arguments: &[OsString]) -> R
     argv_pointers.push(std::ptr::null());
 
     unsafe extern "C" {
-        fn execve(
-            pathname: *const c_char,
-            argv: *const *const c_char,
-            environment: *const *const c_char,
-        ) -> i32;
+        fn execv(pathname: *const c_char, argv: *const *const c_char) -> i32;
     }
-
-    let environment = match original_environment_pointer() {
-        Ok(environment) => environment,
-        Err(error) => return ReplaceProcessError::Environment(error),
-    };
 
     if let Err(error) = restore_inherited_sigpipe_for_exec() {
         return ReplaceProcessError::RestoreSignal(error);
     }
 
-    // Pass libc's original environment array directly: rebuilding it through Rust would discard
-    // duplicate keys and raw entries. Direct execve also avoids execvp's shell fallback.
+    // execv hands the child libc's live environment array untouched; rebuilding it through Rust
+    // would discard duplicate keys and entries without `=`. execvp is avoided for its shell
+    // fallback on ENOEXEC.
     unsafe {
-        execve(pathname.as_ptr(), argv_pointers.as_ptr(), environment);
+        execv(pathname.as_ptr(), argv_pointers.as_ptr());
     }
     ReplaceProcessError::Execute(io::Error::last_os_error())
 }
