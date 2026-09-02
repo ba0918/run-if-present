@@ -10,7 +10,7 @@ use std::process::{Command, Output, Stdio};
 
 mod common;
 
-use common::{closed_pipe_writer, TempDir};
+use common::{closed_pipe_writer, non_utf8_entry, TempDir};
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_run-if-present"))
@@ -1272,6 +1272,10 @@ fn a_non_utf8_bare_command_is_preserved_as_argv0() {
     let temp = TempDir::new();
     let name = OsString::from_vec(b"argv0-\xff".to_vec());
     let reporter = temp.path().join(&name);
+    if non_utf8_entry(fs::File::create(&reporter), &reporter).is_none() {
+        return;
+    }
+    fs::remove_file(&reporter).unwrap();
     compile_argv0_reporter(&temp, &reporter);
 
     let direct = Command::new(&name)
@@ -1889,7 +1893,9 @@ fn an_empty_child_argument_reaches_the_child() {
 fn non_utf8_home_is_used_without_lossy_conversion() {
     let temp = TempDir::new();
     let home = temp.path().join(OsString::from_vec(vec![b'h', 0xff]));
-    fs::create_dir(&home).unwrap();
+    if non_utf8_entry(fs::create_dir(&home), &home).is_none() {
+        return;
+    }
     fs::write(home.join("guard"), b"").unwrap();
 
     let output = binary()
