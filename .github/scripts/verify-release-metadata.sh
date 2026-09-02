@@ -11,7 +11,7 @@ case "$tag" in
   *) echo "release metadata: tag must be v<version>" >&2; exit 1 ;;
 esac
 
-if ! "$script_dir/verify-package-version.sh" "$version" "$manifest" >/dev/null; then
+if ! "$script_dir/verify-package-version.sh" "$version" "$manifest" >/dev/null 2>&1; then
   echo "release metadata: tag and Cargo version disagree" >&2
   exit 1
 fi
