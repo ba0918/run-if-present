@@ -539,9 +539,7 @@ fn an_unusable_command_exits_126() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(126));
-    assert!(output.stdout.is_empty());
-    assert!(!output.stderr.is_empty());
+    assert_diagnostic(&output, 126, "resolve executable");
 }
 
 #[test]
@@ -791,8 +789,7 @@ fn a_missing_script_interpreter_exits_127() {
 
     let output = binary().arg("command").arg(script).output().unwrap();
 
-    assert_eq!(output.status.code(), Some(127));
-    assert!(!output.stderr.is_empty());
+    assert_diagnostic(&output, 127, "execute");
 }
 
 #[test]
@@ -802,8 +799,7 @@ fn an_executable_format_failure_exits_126() {
 
     let output = binary().arg("command").arg(program).output().unwrap();
 
-    assert_eq!(output.status.code(), Some(126));
-    assert!(!output.stderr.is_empty());
+    assert_diagnostic(&output, 126, "execute");
 }
 
 #[test]
