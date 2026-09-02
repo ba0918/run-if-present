@@ -1550,14 +1550,14 @@ fn standard_descriptors_closed_at_start_remain_closed_in_the_child() {
 #[test]
 fn a_replacement_failure_keeps_its_exit_code_when_stderr_is_a_closed_pipe() {
     let temp = TempDir::new();
-    let program = temp.path().join("not-executable");
-    fs::write(&program, b"not executable").unwrap();
+    let program = temp.executable("invalid-format", b"not executable format");
     let mut command = binary();
     command.arg("command").arg(program);
 
     let status = status_with_closed_stderr(command);
 
     assert_eq!(status.code(), Some(126));
+    assert_eq!(status.signal(), None);
 }
 
 #[test]
