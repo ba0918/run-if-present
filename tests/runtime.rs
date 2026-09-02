@@ -1874,9 +1874,16 @@ fn a_close_on_exec_descriptor_is_closed_before_the_child() {
     }
 
     let output = command.output().unwrap();
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    let report = format!(
+        "exit code {:?}, signal {:?}, stdout {:?}, stderr {:?}",
+        output.status.code(),
+        output.status.signal(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert!(output.stdout.is_empty(), "{report}");
+    assert!(output.stderr.is_empty(), "{report}");
 }
 
 #[test]
