@@ -29,10 +29,8 @@ Reuse decisions, in ladder order:
 
 - Command-line parsing — adopt `clap` 4.6.6, as fixed by `## 12. Implementation dependencies`;
   its OS-string-aware parser owns the public grammar while child tokens remain opaque.
-- Bare-command discovery — adopt `which` 8.0.6, as fixed by `## 12. Implementation dependencies`;
-  supplement it locally only where the specified absence, inspection-failure, and preflight
-  distinctions require more information than discovery returns.
-- Tilde expansion, filesystem classification, diagnostic escaping, and process replacement —
+- Bare-command discovery, tilde expansion, filesystem classification, diagnostic escaping, and
+  process replacement —
   use the Rust and Unix platform facilities already available, then add minimal local code; the
   specification explicitly assigns these boundaries to the standard library and local code.
 - Behavioral test process control and temporary filesystem setup — use the Rust standard library
@@ -205,10 +203,10 @@ proof that explicit paths are not searched through `PATH`, shell-only names, ear
 candidates, later usable candidates, inspection failure followed by a usable candidate,
 inspection failure with no usable candidate, preflight-only failure, and confirmed absence; finish with
 `mise exec -E local -- cargo test --all-targets --all-features`.
-Left to the implementer: private classifier types and the smallest local supplement around
-`which` needed to retain the three outcomes.
-Stop and hand back if: `which` behavior makes the specified search ordering or error distinctions
-unobservable without replacing the approved dependency or inventing a public behavior.
+Left to the implementer: private classifier types and the local search over `PATH` entries that
+retains the three outcomes.
+Stop and hand back if: the specified search ordering or error distinctions cannot be made
+observable without adding a dependency or inventing a public behavior.
 
 ## Step 5 — Evaluate path guards and replace the process transparently
 

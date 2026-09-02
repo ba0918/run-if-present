@@ -115,13 +115,13 @@ If none is found, outcomes have this priority:
 2. At least one existing candidate that fails preflight exits 126 with a diagnostic.
 3. No candidate is confirmed absence and exits 0 silently.
 
-The `which` crate performs discovery, supplemented by local checks needed to retain these
-distinctions.
+Discovery is local: each `PATH` entry is taken literally, joined with the bare name, and inspected
+in order with the standard library, so that these distinctions remain observable.
 
 Success is observable when an earlier candidate that fails preflight does not hide a later
 candidate that passes preflight, but a preflight-failure-only result exits 126. A launch failure
-after preflight never resumes search. A counter-example is mapping `which`'s no-executable result
-directly to silent success.
+after preflight never resumes search. A counter-example is mapping every unsuccessful search
+result directly to silent success.
 
 If inspecting an earlier search location fails but a later candidate passes preflight, the later
 candidate is selected. Inspection failure has priority only when no candidate passes preflight.
@@ -199,9 +199,8 @@ filesystem state. A counter-example is a cache that changes later skip behavior.
 - Rust is the implementation language.
 - The public Cargo package/crate name and installed command name are both `run-if-present`.
 - `clap` 4.6.6 provides OS-string-aware parsing, help, and version output; color is disabled.
-- `which` 8.0.6 provides executable discovery.
-- Tilde handling, supplemental classification, and Unix process replacement use the standard
-  library and minimal local code.
+- Tilde handling, executable discovery and classification, and Unix process replacement use the
+  standard library and minimal local code.
 - `Cargo.lock` is committed.
 - `Cargo.toml` declares `rust-version = "1.85"`, the highest minimum of the selected dependencies.
 - `Cargo.toml` declares the exact plain-text package description: `Run a command only when an
@@ -337,8 +336,11 @@ is adding a speculative option for possible later use.
 - `try-run`, `if-present`, `run-optional`, or `soft-run`: the chosen name states the condition
   without implying that runtime failures are swallowed.
 - Skipping all lookup, inspection, or launch errors: only confirmed absence is optional.
-- Zero dependencies: established crates own parsing and discovery, with local code only where
-  their contract is insufficient.
+- Zero dependencies: an established crate owns parsing, with local code only where its contract
+  is insufficient.
+- The `which` crate for discovery: it expands a leading `~` in `PATH` entries and normalises `.`
+  components, so its result could only be accepted after comparing it with the literal candidate
+  that local code had already built; the guard was larger than the discovery it protected.
 - glibc binaries: musl reduces Linux host-library coupling.
 - Latest-stable-only support: the compiler floor is declared and tested.
 - Independent manual publication: a guarded workflow reduces mismatched public states.
