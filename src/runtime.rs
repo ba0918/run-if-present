@@ -96,20 +96,16 @@ pub fn run(arguments: Arguments) -> Result<(), RunError> {
                 Err(error) => return Err(diagnostic("inspect", guard, error, 1)),
             }
             let requested = command.remove(0);
-            let pathname = if requested.as_bytes().contains(&b'/') {
-                requested.clone()
-            } else {
-                resolve_command(&requested)?
-                    .ok_or_else(|| {
-                        diagnostic(
-                            "execute",
-                            requested.clone(),
-                            io::Error::new(io::ErrorKind::NotFound, "command not found"),
-                            127,
-                        )
-                    })?
-                    .into_os_string()
-            };
+            let pathname = resolve_command(&requested)?
+                .ok_or_else(|| {
+                    diagnostic(
+                        "execute",
+                        requested.clone(),
+                        io::Error::new(io::ErrorKind::NotFound, "command not found"),
+                        127,
+                    )
+                })?
+                .into_os_string();
             Execution {
                 pathname,
                 argv0: requested,

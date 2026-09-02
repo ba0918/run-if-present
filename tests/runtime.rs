@@ -289,14 +289,66 @@ fn a_permission_denied_path_guard_is_an_inspection_failure() {
 
 #[test]
 fn a_present_guard_does_not_hide_a_missing_launch_target() {
+    let program = "/definitely/not/present";
     let output = binary()
-        .args(["path", "/bin", "--", "/definitely/not/present"])
+        .args(["path", "/bin", "--", program])
         .output()
         .unwrap();
 
     assert_eq!(output.status.code(), Some(127));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).starts_with("run-if-present: execute:"));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!("run-if-present: execute: \"{program}\": command not found\n")
+    );
+}
+
+#[test]
+fn an_uninvokable_explicit_launch_target_has_the_command_mode_diagnostic() {
+    let temp = TempDir::new();
+    let program = temp.path().join("not-executable");
+    fs::write(&program, b"not executable").unwrap();
+
+    let command_mode = binary().arg("command").arg(&program).output().unwrap();
+    let path_mode = binary()
+        .arg("path")
+        .arg(temp.path())
+        .args(["--"])
+        .arg(&program)
+        .output()
+        .unwrap();
+
+    assert_eq!(command_mode.status.code(), Some(126));
+    assert_eq!(path_mode.status.code(), Some(126));
+    assert_eq!(path_mode.stderr, command_mode.stderr);
+    assert!(String::from_utf8_lossy(&path_mode.stderr).contains("resolve executable"));
+    assert!(String::from_utf8_lossy(&path_mode.stderr).contains("not an executable regular file"));
+}
+
+#[test]
+fn an_explicit_launch_target_through_a_regular_file_is_command_not_found() {
+    let temp = TempDir::new();
+    let file = temp.path().join("file");
+    fs::write(&file, b"").unwrap();
+    let program = file.join("tool");
+
+    let output = binary()
+        .arg("path")
+        .arg(temp.path())
+        .args(["--"])
+        .arg(&program)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(127));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "run-if-present: execute: \"{}\": command not found\n",
+            program.display()
+        )
+    );
 }
 
 #[test]
@@ -310,6 +362,72 @@ fn an_absent_command_is_silent_success() {
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_symbolic_link_to_an_executable_is_selected_from_path() {
+    let temp = TempDir::new();
+    let executable = temp.executable("executable", b"#!/bin/sh\nprintf linked");
+    symlink(executable, temp.path().join("tool")).unwrap();
+
+    let output = binary()
+        .env("PATH", temp.path())
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"linked");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_dangling_symbolic_link_is_no_path_candidate() {
+    let temp = TempDir::new();
+    symlink(temp.path().join("absent"), temp.path().join("tool")).unwrap();
+
+    let output = binary()
+        .env("PATH", temp.path())
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn an_empty_path_entry_names_the_effective_working_directory() {
+    let temp = TempDir::new();
+    temp.executable("tool", b"#!/bin/sh\nprintf local");
+
+    let output = binary()
+        .current_dir(temp.path())
+        .env("PATH", ":")
+        .args(["command", "tool"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"local");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn a_bare_launch_target_without_a_candidate_is_command_not_found() {
+    let output = binary()
+        .env("PATH", "")
+        .args(["path", "/bin", "--", "not-present"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(127));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "run-if-present: execute: \"not-present\": command not found\n"
+    );
 }
 
 #[test]
@@ -1255,7 +1373,7 @@ fn a_close_on_exec_descriptor_is_closed_before_the_child() {
 }
 
 #[test]
-fn a_non_utf8_diagnostic_escapes_control_bytes_and_includes_the_os_error() {
+fn a_non_utf8_missing_launch_target_is_escaped_with_the_fixed_reason() {
     let operand = OsString::from_vec(vec![b'/', b'm', b'i', b's', b's', b'\t', 0xff]);
     let output = binary()
         .env("LC_ALL", "C")
@@ -1269,7 +1387,7 @@ fn a_non_utf8_diagnostic_escapes_control_bytes_and_includes_the_os_error() {
     assert_eq!(diagnostic.lines().count(), 1);
     assert!(diagnostic.contains("\\t"));
     assert!(diagnostic.contains("\\xff"));
-    assert!(diagnostic.contains("No such file or directory"));
+    assert!(diagnostic.contains("command not found"));
 }
 
 #[test]
