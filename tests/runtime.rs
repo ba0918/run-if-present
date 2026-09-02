@@ -920,7 +920,7 @@ fn relative_guards_are_evaluated_after_chdir() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        temp.path().to_string_lossy()
+        fs::canonicalize(temp.path()).unwrap().to_string_lossy()
     );
     assert!(output.stderr.is_empty());
 }
@@ -1171,7 +1171,7 @@ fn repeated_slashes_in_a_tilde_chdir_stay_within_home() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        directory.to_string_lossy()
+        fs::canonicalize(&directory).unwrap().to_string_lossy()
     );
     assert!(output.stderr.is_empty());
 }
