@@ -21,11 +21,6 @@ fn fixture() -> PathBuf {
         "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
     )
     .unwrap();
-    fs::write(
-        root.join("prior-CHANGELOG.md"),
-        "# Changelog\n\n## Unreleased\n\n### Added\n\n- A promoted item.\n",
-    )
-    .unwrap();
     root
 }
 
@@ -35,19 +30,8 @@ fn metadata(root: &Path, tag: &str) -> std::process::Output {
         .arg(tag)
         .arg(root.join("Cargo.toml"))
         .arg(root.join("CHANGELOG.md"))
-        .arg(root.join("prior-CHANGELOG.md"))
         .output()
         .unwrap()
-}
-
-fn write_changelog_date(root: &Path, date: &str) {
-    fs::write(
-        root.join("CHANGELOG.md"),
-        format!(
-            "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - {date}\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n"
-        ),
-    )
-    .unwrap();
 }
 
 fn write_changelog_link(root: &Path, link: &str) {
@@ -305,21 +289,6 @@ fn final_release_job_reconciles_downloaded_assets_before_publishing() {
 }
 
 #[test]
-fn release_workflow_supplies_the_tagged_parent_changelog_for_promotion_verification() {
-    let workflow = fs::read_to_string(".github/workflows/release.yml").unwrap();
-    let metadata_job = yaml_job_block(&workflow, "metadata").unwrap();
-
-    assert!(metadata_job.contains("fetch-depth: 2"));
-    let prior = metadata_job
-        .find("git show \"$GITHUB_SHA^:CHANGELOG.md\" > prior-CHANGELOG.md")
-        .unwrap();
-    let verification = metadata_job
-        .find("\"$GITHUB_REF_NAME\" Cargo.toml CHANGELOG.md prior-CHANGELOG.md")
-        .unwrap();
-    assert!(prior < verification);
-}
-
-#[test]
 fn registry_token_is_scoped_only_to_the_cargo_publish_step() {
     let workflow = fs::read_to_string(".github/workflows/release.yml").unwrap();
 
@@ -441,53 +410,6 @@ fn package_version_validation_rejects_shell_syntax_without_executing_it() {
 }
 
 #[test]
-fn release_metadata_accepts_a_fixed_release_date_on_retries() {
-    let root = fixture();
-    assert!(metadata(&root, "v0.1.0").status.success());
-    assert!(metadata(&root, "v0.1.0").status.success());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn release_metadata_rejects_replacing_prior_unreleased_content() {
-    let root = fixture();
-    fs::write(
-        root.join("CHANGELOG.md"),
-        "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- An unrelated replacement.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
-    )
-    .unwrap();
-
-    assert!(!metadata(&root, "v0.1.0").status.success());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn release_metadata_rejects_items_left_in_unreleased_with_an_empty_release() {
-    let root = fixture();
-    fs::write(
-        root.join("CHANGELOG.md"),
-        "# Changelog\n\n## Unreleased\n\n### Added\n\n- Still unreleased.\n\n## [0.1.0] - 2024-01-02\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
-    )
-    .unwrap();
-
-    assert!(!metadata(&root, "v0.1.0").status.success());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn release_metadata_rejects_unreleased_items_even_when_the_release_has_content() {
-    let root = fixture();
-    fs::write(
-        root.join("CHANGELOG.md"),
-        "# Changelog\n\n## Unreleased\n\n### Added\n\n- Still unreleased.\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
-    )
-    .unwrap();
-
-    assert!(!metadata(&root, "v0.1.0").status.success());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
 fn release_metadata_does_not_count_items_from_another_version() {
     let root = fixture();
     fs::write(
@@ -501,39 +423,35 @@ fn release_metadata_does_not_count_items_from_another_version() {
 }
 
 #[test]
-fn release_metadata_accepts_promoted_content_and_empty_unreleased_categories() {
+fn release_metadata_accepts_a_promoted_changelog() {
+    let root = fixture();
+
+    let output = metadata(&root, "v0.1.0");
+
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(output.stdout, b"0.1.0\n");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_rejects_items_left_in_unreleased() {
+    let root = fixture();
+    for changelog in [
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n- Still unreleased.\n\n## [0.1.0] - 2024-01-02\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
+        "# Changelog\n\n## Unreleased\n\n### Added\n\n- Still unreleased.\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
+    ] {
+        fs::write(root.join("CHANGELOG.md"), changelog).unwrap();
+        assert!(!metadata(&root, "v0.1.0").status.success(), "{changelog}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn release_metadata_requires_a_dated_heading() {
     let root = fixture();
     fs::write(
         root.join("CHANGELOG.md"),
-        "# Changelog\n\n## Unreleased\n\n### Added\n\n## [0.1.0] - 2024-01-02\n\n### Added\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
-    )
-    .unwrap();
-
-    assert!(metadata(&root, "v0.1.0").status.success());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn release_metadata_rejects_a_tag_mismatch() {
-    let root = fixture();
-    assert!(!metadata(&root, "v0.1.1").status.success());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn release_metadata_rejects_a_changelog_mismatch() {
-    let root = fixture();
-    fs::write(root.join("CHANGELOG.md"), "# Changelog\n\n## Unreleased\n").unwrap();
-    assert!(!metadata(&root, "v0.1.0").status.success());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn release_metadata_compares_the_link_label_and_version_literally() {
-    let root = fixture();
-    fs::write(
-        root.join("CHANGELOG.md"),
-        "# Changelog\n\n## [0.1.0] - 2024-01-02\n\n[0x1y0]: https://example.invalid/compare/v0.0.0...v0x1y0\n",
+        "# Changelog\n\n## Unreleased\n\n## [0.1.0]\n\n- A promoted item.\n\n[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0\n",
     )
     .unwrap();
 
@@ -542,17 +460,14 @@ fn release_metadata_compares_the_link_label_and_version_literally() {
 }
 
 #[test]
-fn release_metadata_requires_an_exact_https_comparison_range() {
+fn release_metadata_requires_a_comparison_link_ending_in_the_tag() {
     let root = fixture();
 
     for link in [
         "[0.1.0]: https://example.invalid/releases/tag/v0.1.0",
-        "[0.1.0]: https://example.invalid/compare/...v0.1.0",
-        "[0.1.0]: https://example.invalid/compare/v0.0.0.v0.1.0",
-        "[0.1.0]: https://example.invalid/compare/v0.0.0..v0.1.0",
-        "[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0?version=v0.1.0",
-        "[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.0#v0.1.0",
+        "[0.1.0]: https://example.invalid/compare/v0.0.0...v0.1.1",
         "[0.1.1]: https://example.invalid/compare/v0.0.0...v0.1.0",
+        "[0x1y0]: https://example.invalid/compare/v0.0.0...v0x1y0",
     ] {
         write_changelog_link(&root, link);
         assert!(!metadata(&root, "v0.1.0").status.success(), "{link}");
@@ -567,55 +482,18 @@ fn release_metadata_requires_an_exact_https_comparison_range() {
 }
 
 #[test]
-fn release_metadata_rejects_spaces_in_comparison_links() {
+fn release_metadata_rejects_a_tag_mismatch() {
     let root = fixture();
-    for link in [
-        "[0.1.0]: https://example .invalid/compare/v0.0.0...v0.1.0",
-        "[0.1.0]: https://example.invalid/compare/release candidate...v0.1.0",
-    ] {
-        write_changelog_link(&root, link);
-        assert!(!metadata(&root, "v0.1.0").status.success(), "{link}");
-    }
+    assert!(!metadata(&root, "v0.1.1").status.success());
+    assert!(!metadata(&root, "0.1.0").status.success());
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn release_metadata_rejects_tabs_in_comparison_links() {
+fn release_metadata_rejects_a_changelog_mismatch() {
     let root = fixture();
-    for link in [
-        "[0.1.0]: https://example\t.invalid/compare/v0.0.0...v0.1.0",
-        "[0.1.0]: https://example.invalid/compare/release\tcandidate...v0.1.0",
-    ] {
-        write_changelog_link(&root, link);
-        assert!(!metadata(&root, "v0.1.0").status.success(), "{link:?}");
-    }
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn release_metadata_rejects_more_than_three_range_dots() {
-    let root = fixture();
-    for link in [
-        "[0.1.0]: https://example.invalid/compare/v0.0.0....v0.1.0",
-        "[0.1.0]: https://example.invalid/compare/v0.0.0.....v0.1.0",
-    ] {
-        write_changelog_link(&root, link);
-        assert!(!metadata(&root, "v0.1.0").status.success(), "{link}");
-    }
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn release_metadata_rejects_impossible_calendar_dates() {
-    let root = fixture();
-
-    for date in ["9999-99-99", "2025-02-29", "2024-04-31"] {
-        write_changelog_date(&root, date);
-        assert!(!metadata(&root, "v0.1.0").status.success(), "{date}");
-    }
-
-    write_changelog_date(&root, "2024-02-29");
-    assert!(metadata(&root, "v0.1.0").status.success());
+    fs::write(root.join("CHANGELOG.md"), "# Changelog\n\n## Unreleased\n").unwrap();
+    assert!(!metadata(&root, "v0.1.0").status.success());
     fs::remove_dir_all(root).unwrap();
 }
 

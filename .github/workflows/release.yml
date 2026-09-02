@@ -36,14 +36,12 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 2
           persist-credentials: false
       - id: metadata
         name: Verify tag, Cargo, and changelog agreement
         run: |
-          git show "$GITHUB_SHA^:CHANGELOG.md" > prior-CHANGELOG.md
           version=$(.github/scripts/verify-release-metadata.sh \
-            "$GITHUB_REF_NAME" Cargo.toml CHANGELOG.md prior-CHANGELOG.md)
+            "$GITHUB_REF_NAME" Cargo.toml CHANGELOG.md)
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   verify:
