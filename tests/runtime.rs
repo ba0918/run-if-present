@@ -281,6 +281,21 @@ INTERPOSE(interposed_execv, execv)
     } else {
         ("fcntl", "close", "execv")
     };
+    // dyld applies the interposition to dlsym(RTLD_NEXT) results too, so on macOS the
+    // originals are reached by name: calls from the interposing image are not rewritten.
+    let originals = if cfg!(target_os = "macos") {
+        r#"
+#define real_fcntl fcntl
+#define real_close close
+#define real_execv execv
+"#
+    } else {
+        r#"
+#define real_fcntl ((fcntl_function)dlsym(RTLD_NEXT, "fcntl"))
+#define real_close ((close_function)dlsym(RTLD_NEXT, "close"))
+#define real_execv ((execv_function)dlsym(RTLD_NEXT, "execv"))
+"#
+    };
     let body = format!(
         r#"#define _GNU_SOURCE
 #include <dlfcn.h>
@@ -297,8 +312,8 @@ static int requested_descriptor(const char *name, int descriptor) {{
 typedef int (*fcntl_function)(int, int, ...);
 typedef int (*close_function)(int);
 typedef int (*execv_function)(const char *, char *const[]);
+{originals}
 int {fcntl_name}(int descriptor, int command, ...) {{
-    fcntl_function real_fcntl = (fcntl_function)dlsym(RTLD_NEXT, "fcntl");
     if (command == F_GETFD) {{
         if (requested_descriptor("RUN_IF_PRESENT_FAIL_FCNTL_FD", descriptor)) {{
             errno = EIO;
@@ -322,12 +337,10 @@ int {close_name}(int descriptor) {{
         errno = EIO;
         return -1;
     }}
-    close_function real_close = (close_function)dlsym(RTLD_NEXT, "close");
     return real_close(descriptor);
 }}
 int {execv_name}(const char *path, char *const argv[]) {{
     const char *value = getenv("RUN_IF_PRESENT_REQUIRE_CLOSED_EXEC_FD");
-    fcntl_function real_fcntl = (fcntl_function)dlsym(RTLD_NEXT, "fcntl");
     if (value != NULL) {{
         int descriptor = atoi(value);
         errno = 0;
@@ -336,7 +349,6 @@ int {execv_name}(const char *path, char *const argv[]) {{
             return -1;
         }}
     }}
-    execv_function real_execv = (execv_function)dlsym(RTLD_NEXT, "execv");
     return real_execv(path, argv);
 }}
 {interpose}
@@ -385,6 +397,13 @@ INTERPOSE(interposed_signal, signal)
     } else {
         ""
     };
+    // dyld applies the interposition to dlsym(RTLD_NEXT) results too, so on macOS the
+    // original is reached by name: calls from the interposing image are not rewritten.
+    let original = if cfg!(target_os = "macos") {
+        "#define real_signal signal"
+    } else {
+        r#"#define real_signal ((signal_function)dlsym(RTLD_NEXT, "signal"))"#
+    };
     let body = format!(
         r#"#define _GNU_SOURCE
 #include <dlfcn.h>
@@ -392,12 +411,12 @@ INTERPOSE(interposed_signal, signal)
 typedef void (*signal_handler)(int);
 typedef signal_handler (*signal_function)(int, signal_handler);
 static int failed_capture = 0;
+{original}
 signal_handler {signal_name}(int number, signal_handler handler) {{
     if (number == SIGPIPE && !failed_capture) {{
         failed_capture = 1;
         return SIG_ERR;
     }}
-    signal_function real_signal = (signal_function)dlsym(RTLD_NEXT, "signal");
     return real_signal(number, handler);
 }}
 {interpose}
