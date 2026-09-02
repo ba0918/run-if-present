@@ -118,6 +118,17 @@ fn requires_the_path_separator() {
 }
 
 #[test]
+fn rejects_a_missing_path_launch_command_after_the_separator() {
+    let output = binary().args(["path", "guard", "--"]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.starts_with("run-if-present: syntax:"));
+    assert_eq!(diagnostic.lines().count(), 1);
+}
+
+#[test]
 fn rejects_an_empty_path_launch_command_as_invalid_syntax() {
     let output = binary().args(["path", "/bin", "--", ""]).output().unwrap();
 
