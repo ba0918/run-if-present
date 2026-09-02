@@ -9,6 +9,8 @@ be confirmed.
 
 The approved specification, [`docs/spec/run-if-present.md`](docs/spec/run-if-present.md), is the
 canonical source for detailed product, implementation, verification, and release requirements.
+[`CONTEXT.md`](CONTEXT.md) is the glossary: the project's reading of terms such as "optional
+condition" and "confirmed absence", and the words not to use for them.
 
 ## Implementation and verification
 
