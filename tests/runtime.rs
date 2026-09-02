@@ -199,6 +199,58 @@ int execv(const char *path, char *const argv[]) {{
     library
 }
 
+fn empty_user_database_home_interposer(temp: &TempDir) -> PathBuf {
+    let source = temp.path().join("empty-user-database-home.c");
+    let library = if cfg!(target_os = "macos") {
+        temp.path().join("libempty-user-database-home.dylib")
+    } else {
+        temp.path().join("libempty-user-database-home.so")
+    };
+    let getpwuid_name = if cfg!(target_os = "macos") {
+        "interposed_getpwuid"
+    } else {
+        "getpwuid"
+    };
+    let interpose = if cfg!(target_os = "macos") {
+        r#"
+#define INTERPOSE(replacement, replacee) \
+    __attribute__((used)) static struct { const void *replacement_ptr; const void *replacee_ptr; } \
+    interpose_##replacee __attribute__((section("__DATA,__interpose"))) = \
+    { (const void *)(unsigned long)&replacement, (const void *)(unsigned long)&replacee };
+INTERPOSE(interposed_getpwuid, getpwuid)
+"#
+    } else {
+        ""
+    };
+    let body = format!(
+        r#"#include <pwd.h>
+#include <sys/types.h>
+static struct passwd record = {{ .pw_dir = "" }};
+struct passwd *{getpwuid_name}(uid_t uid) {{
+    (void)uid;
+    return &record;
+}}
+{interpose}
+"#,
+        getpwuid_name = getpwuid_name,
+    );
+    fs::write(&source, body).unwrap();
+    let mut compiler = Command::new("cc");
+    if cfg!(target_os = "macos") {
+        compiler.args(["-dynamiclib"]);
+    } else {
+        compiler.args(["-shared", "-fPIC"]);
+    }
+    let status = compiler
+        .arg(&source)
+        .arg("-o")
+        .arg(&library)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    library
+}
+
 fn descriptor_state_interposer(temp: &TempDir) -> PathBuf {
     let source = temp.path().join("descriptor-state.c");
     let library = if cfg!(target_os = "macos") {
@@ -1706,4 +1758,24 @@ fn an_empty_home_uses_the_operating_system_user_database() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"database-home");
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn an_empty_user_database_home_is_reported_by_the_cli() {
+    let temp = TempDir::new();
+    let interposer = empty_user_database_home_interposer(&temp);
+    let mut command = binary();
+    command
+        .env_remove("HOME")
+        .args(["path", "~", "--", "/bin/true"]);
+    preload(&mut command, &interposer);
+
+    let output = command.output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(diagnostic.lines().count(), 1);
+    assert!(diagnostic.starts_with("run-if-present: expand:"));
+    assert!(diagnostic.contains("home directory is unavailable"));
 }
